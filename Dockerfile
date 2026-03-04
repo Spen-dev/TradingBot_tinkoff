@@ -7,14 +7,15 @@ WORKDIR /app
 # Копируем проект (исключения в .dockerignore)
 COPY . .
 
-# Зеркало PyPI (Яндекс) — зависимость tinkoff-investments «tinkoff» не находится при недоступном PyPI на VPS.
-ENV PIP_INDEX_URL=https://mirror.yandex.ru/pypi/simple
-ENV PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu
-# git — для установки tinkoff-investments из GitHub.
+# PyPI — для poetry-core при сборке из git; зеркало и PyTorch — доп. индексы.
+ENV PIP_INDEX_URL=https://pypi.org/simple
+ENV PIP_EXTRA_INDEX_URL=https://mirror.yandex.ru/pypi/simple https://download.pytorch.org/whl/cpu
+# Сначала ставим poetry-core, чтобы subprocess при pip install из git его нашёл (на зеркале его нет).
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* && \
     pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir poetry-core && \
     pip install --no-cache-dir torch && \
-    pip install --no-cache-dir "tinkoff-investments @ git+https://github.com/RussianInvestments/invest-python.git" && \
+    pip install --no-cache-dir --no-build-isolation "tinkoff-investments @ git+https://github.com/RussianInvestments/invest-python.git" && \
     pip install --no-cache-dir -e .
 
 # Директории для логов и данных
