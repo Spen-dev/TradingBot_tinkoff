@@ -9,7 +9,7 @@ COPY . .
 
 # PyPI — для poetry-core при сборке из git; зеркало и PyTorch — доп. индексы.
 ENV PIP_INDEX_URL=https://pypi.org/simple
-ENV PIP_EXTRA_INDEX_URL=https://mirror.yandex.ru/pypi/simple https://download.pytorch.org/whl/cpu
+ENV PIP_EXTRA_INDEX_URL="https://mirror.yandex.ru/pypi/simple https://download.pytorch.org/whl/cpu"
 # Сначала ставим poetry-core, чтобы subprocess при pip install из git его нашёл (на зеркале его нет).
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* && \
     pip install --no-cache-dir --upgrade pip && \
