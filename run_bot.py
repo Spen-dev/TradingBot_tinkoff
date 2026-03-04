@@ -1,3 +1,11 @@
+import sys
+import site
+# В Docker при запуске из /app что-то перехватывает импорт tinkoff — ставим site-packages в начало path
+for _sp in site.getsitepackages():
+  if _sp not in sys.path:
+    sys.path.insert(0, _sp)
+  break
+
 import asyncio
 import logging
 import os
@@ -6,14 +14,7 @@ import time
 from datetime import datetime, date, timedelta
 from pathlib import Path
 
-try:
-  from tinkoff.invest.exceptions import RequestError
-except ModuleNotFoundError:
-  import subprocess
-  import sys
-  logging.getLogger(__name__).warning("tinkoff-invest not found, installing...")
-  subprocess.check_call([sys.executable, "-m", "pip", "install", "tinkoff-invest"])
-  from tinkoff.invest.exceptions import RequestError
+from tinkoff.invest.exceptions import RequestError
 
 logger = logging.getLogger(__name__)
 
