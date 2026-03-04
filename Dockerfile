@@ -7,9 +7,11 @@ WORKDIR /app
 # Копируем проект (исключения в .dockerignore)
 COPY . .
 
-# PyPI по умолчанию; PyTorch — extra-index, иначе pip не находит tinkoff-investments.
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir torch tinkoff-investments --extra-index-url https://download.pytorch.org/whl/cpu && \
+# git нужен для pip install из GitHub; torch — PyTorch index; tinkoff-investments — с GitHub (PyPI на VPS бывает недоступен).
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* && \
+    pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch --extra-index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir "tinkoff-investments @ git+https://github.com/RussianInvestments/invest-python.git" && \
     pip install --no-cache-dir -e .
 
 # Директории для логов и данных
