@@ -91,3 +91,26 @@ docker compose up -d
 - На сервере должен быть **один** запущенный контейнер бота (иначе конфликт Telegram getUpdates).
 - Файлы `data/` и `learned_params/` монтируются с хоста — логи и обученные параметры сохраняются между перезапусками.
 - Порт 8000 используется для health-check; при необходимости измените в `config.yaml` (секция `web`) и в `docker-compose.yml` (ports).
+
+---
+
+## 6. Бот не отвечает в Telegram
+
+1. **Проверить, что контейнер запущен и не падает:**
+   ```bash
+   docker compose ps
+   docker compose logs -f bot
+   ```
+   В логах должна быть строка: `Telegram polling запущен; ответы только в чате admin_chat_id=...` — если её нет, процесс падает до старта polling (ошибка конфига, брокера или импорта).
+
+2. **В `.env` на сервере обязательны:**
+   - `TELEGRAM_TOKEN` — токен бота от @BotFather
+   - `TELEGRAM_ADMIN_CHAT_ID` — **числовой** id чата, с которого разрешены команды (бот отвечает только этому чату).
+
+3. **Узнать свой chat_id:** напишите боту @userinfobot в Telegram — он пришлёт ваш id. Этот же id укажите в `TELEGRAM_ADMIN_CHAT_ID` и пишите боту **из того же аккаунта** (личный чат с ботом или группа, где id совпадает).
+
+4. **Проверить переменные в контейнере:**
+   ```bash
+   docker compose exec bot env | grep TELEGRAM
+   ```
+   Должны быть непустые `TELEGRAM_TOKEN` и `TELEGRAM_ADMIN_CHAT_ID`.

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import Callable, Awaitable
 
 from aiogram import Bot, Dispatcher, types
@@ -6,6 +7,8 @@ from aiogram.filters import Command
 
 from .config import TelegramConfig
 from .telegram_utils import split_message
+
+_log = logging.getLogger(__name__)
 
 START_BUTTON_TEXT = "🟢 Старт"
 STOP_BUTTON_TEXT = "🛑 СТОП"
@@ -363,6 +366,7 @@ class TelegramController:
 
   async def run(self) -> None:
     """Запуск бота. Завершится, когда будет нажата кнопка СТОП или вызван /stop."""
+    _log.info("Telegram polling запущен; ответы только в чате admin_chat_id=%s", self.admin_chat_id)
     poll_task = asyncio.create_task(self.dp.start_polling(self.bot))
     await self._stop_event.wait()
     poll_task.cancel()

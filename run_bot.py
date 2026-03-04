@@ -6,7 +6,14 @@ import time
 from datetime import datetime, date, timedelta
 from pathlib import Path
 
-from tinkoff.invest.exceptions import RequestError
+try:
+  from tinkoff.invest.exceptions import RequestError
+except ModuleNotFoundError:
+  import subprocess
+  import sys
+  logging.getLogger(__name__).warning("tinkoff-invest not found, installing...")
+  subprocess.check_call([sys.executable, "-m", "pip", "install", "tinkoff-invest"])
+  from tinkoff.invest.exceptions import RequestError
 
 logger = logging.getLogger(__name__)
 
