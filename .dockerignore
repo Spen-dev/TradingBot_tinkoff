@@ -1,0 +1,13 @@
+.git
+.venv
+venv
+__pycache__
+.env
+.env.local
+data
+learned_params
+.pytest_cache
+.idea
+.vscode
+backup_*.zip
+*.md

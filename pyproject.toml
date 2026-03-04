@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tinkoff_bot"
+version = "0.1.0"
+description = "Tinkoff trading bot"
+requires-python = ">=3.10"
+dependencies = [
+  "python-dotenv",
+  "PyYAML",
+  "pandas",
+  "prometheus-client",
+  "aiogram",
+  "tinkoff-invest",
+  "gymnasium",
+  "stable-baselines3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools]
+packages = ["tinkoff_bot"]
+
+# Корневая папка = пакет tinkoff_bot
+[tool.setuptools.package-dir]
+tinkoff_bot = "."

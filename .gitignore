@@ -1,0 +1,34 @@
+# Секреты и окружение
+.env
+.env.local
+*.pem
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Логи и данные
+data/logs/
+data/*.json
+data/*.zip
+data/*.log
+learned_params/*.json
+
+# IDE и ОС
+.idea/
+.vscode/
+.DS_Store
+
+# Тесты
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Бэкапы
+backup_*.zip

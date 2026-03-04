@@ -1,0 +1,9 @@
+python-dotenv
+PyYAML
+pandas
+prometheus-client
+aiogram
+tinkoff-invest
+gymnasium
+stable-baselines3
+optuna
