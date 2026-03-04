@@ -7,10 +7,9 @@ WORKDIR /app
 # Копируем проект (исключения в .dockerignore)
 COPY . .
 
-# Torch CPU (без CUDA) — для RL в контейнере; затем tinkoff-invest и проект с sb3/gymnasium.
-# Проверку tinkoff не делаем при сборке (editable install может её ломать); CMD при старте ставит tinkoff-invest.
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir tinkoff-investments && \
+# PyPI по умолчанию; PyTorch — extra-index, иначе pip не находит tinkoff-investments.
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch tinkoff-investments --extra-index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -e .
 
 # Директории для логов и данных
