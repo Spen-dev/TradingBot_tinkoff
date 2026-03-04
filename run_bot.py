@@ -1,10 +1,16 @@
 import sys
-import site
-# В Docker при запуске из /app что-то перехватывает импорт tinkoff — ставим site-packages в начало path
-for _sp in site.getsitepackages():
-  if _sp not in sys.path:
-    sys.path.insert(0, _sp)
-  break
+import os
+# В Docker при запуске из /app импорт tinkoff не находится — ставим site-packages первым
+_app_run = os.path.abspath(__file__).startswith("/app/")
+_sp = "/usr/local/lib/python3.11/site-packages"
+if _app_run and os.path.isdir(_sp) and _sp not in sys.path:
+  sys.path.insert(0, _sp)
+elif not _app_run:
+  import site
+  for _sp in site.getsitepackages():
+    if _sp not in sys.path:
+      sys.path.insert(0, _sp)
+    break
 
 import asyncio
 import logging
