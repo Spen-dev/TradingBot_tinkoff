@@ -11,8 +11,9 @@ COPY . .
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir tinkoff-invest && \
     pip install --no-cache-dir -e . && \
-    python -c "from tinkoff.invest.exceptions import RequestError; print('tinkoff OK')" && \
-    python -c "from stable_baselines3 import PPO; print('RL OK')"
+    pip install --no-cache-dir --force-reinstall tinkoff-invest && \
+    (cd /tmp && python -c "from tinkoff.invest.exceptions import RequestError; print('tinkoff OK')") && \
+    (cd /tmp && python -c "from stable_baselines3 import PPO; print('RL OK')")
 
 # Директории для логов и данных
 RUN mkdir -p /app/data/logs /app/learned_params && chmod -R 777 /app/data /app/learned_params
