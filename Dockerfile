@@ -7,10 +7,13 @@ WORKDIR /app
 # Копируем проект (исключения в .dockerignore)
 COPY . .
 
-# git нужен для pip install из GitHub; torch — PyTorch index; tinkoff-investments — с GitHub (PyPI на VPS бывает недоступен).
+# Зеркало PyPI (Яндекс) — зависимость tinkoff-investments «tinkoff» не находится при недоступном PyPI на VPS.
+ENV PIP_INDEX_URL=https://mirror.yandex.ru/pypi/simple
+ENV PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu
+# git — для установки tinkoff-investments из GitHub.
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* && \
     pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir torch --extra-index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir torch && \
     pip install --no-cache-dir "tinkoff-investments @ git+https://github.com/RussianInvestments/invest-python.git" && \
     pip install --no-cache-dir -e .
 
