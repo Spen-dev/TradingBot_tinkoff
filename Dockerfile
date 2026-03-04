@@ -18,7 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /
     pip install --no-cache-dir torch && \
     pip install --no-cache-dir "cachetools>=5.2.0,<6" "grpcio>=1.59.3" "protobuf>=4.25.1,<5" "python-dateutil>=2.8.2" "deprecation>=2.1.0,<3" && \
     pip install --no-cache-dir --no-build-isolation --no-deps "tinkoff-investments @ git+https://github.com/RussianInvestments/invest-python.git" && \
-    pip install --no-cache-dir -e .
+    pip install --no-cache-dir -e . --no-deps && \
+    pip install --no-cache-dir python-dotenv PyYAML pandas prometheus-client aiogram gymnasium stable-baselines3
 
 # Директории для логов и данных
 RUN mkdir -p /app/data/logs /app/learned_params && chmod -R 777 /app/data /app/learned_params
