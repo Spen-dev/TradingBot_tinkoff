@@ -7,14 +7,11 @@ WORKDIR /app
 # Копируем проект (исключения в .dockerignore)
 COPY . .
 
-# Сначала CPU-версия PyTorch (без CUDA), чтобы не забивать диск на VPS без GPU
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-
-# Явно ставим клиент Тинькофф (пакет tinkoff-invest, импорт: tinkoff.invest)
-RUN pip install --no-cache-dir tinkoff-invest
-
-# Установка пакета и остальных зависимостей (stable-baselines3 подхватит уже установленный torch)
-RUN pip install --no-cache-dir -e .
+# Один слой установки: torch (CPU), tinkoff-invest и проект — чтобы tinkoff гарантированно был в окружении
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir tinkoff-invest && \
+    pip install --no-cache-dir -e . && \
+    python -c "from tinkoff.invest.exceptions import RequestError; print('tinkoff OK')"
 
 # Директории для логов и данных
 RUN mkdir -p /app/data/logs /app/learned_params && chmod -R 777 /app/data /app/learned_params
@@ -22,4 +19,5 @@ RUN mkdir -p /app/data/logs /app/learned_params && chmod -R 777 /app/data /app/l
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
 
-CMD ["python", "run_bot.py"]
+# Установка tinkoff-invest при старте — страховка от кэша/старого образа (если в образе пакета нет)
+CMD ["sh", "-c", "pip install --no-cache-dir -q tinkoff-invest && exec python run_bot.py"]
