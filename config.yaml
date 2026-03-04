@@ -60,7 +60,7 @@ portfolio:
   signal_strength_mult: 0.2    # Влияние силы сигнала на размер заявки (buy: 1+mult*strength)
   signal_strength_min: 0.3     # Минимальная сила сигнала для расчёта размера
   max_overweight_without_signal_pct: 0.0  # При перевесе > N% разрешать сокращение без sell (0=выкл)
-  use_order_book_for_limits: false  # Использовать стакан (bid/ask/mid) при расчёте лимитной цены (экспериментально)
+  use_order_book_for_limits: true  # Использовать стакан (bid/ask/mid) при расчёте лимитной цены (экспериментально)
   # Режим рынка и защита
   market_index_figi: "BBG004730JJ5"  # FIGI индекса (напр. MOEX) для kill-switch и волатильности
   market_panic_drop_pct: 0.05  # Дневное падение индекса (доля) — глобальная пауза до конца дня
@@ -76,13 +76,15 @@ portfolio:
   weekly_report_time: "18:00"  # Время отправки недельного отчёта
   use_candle_cache: false     # Кэшировать свечи на диске
   candle_cache_days: 60        # Срок хранения кэша свечей (дней)
-  gap_risk_enabled: false      # Учитывать риск гэпов (не открывать у «гэповых» бумаг к концу дня)
+  gap_risk_enabled: true     # Учитывать риск гэпов (не открывать у «гэповых» бумаг к концу дня)
   gap_min_pct: 0.03            # Минимальный гэп (доля) для признания бумаги гэповой
   gap_close_minutes: 60        # За сколько минут до конца окна не открывать по гэповым
   no_new_orders_before_end_minutes: 30  # В последние N мин окна не выставлять новые лимитные покупки (0=выкл)
   alert_drawdown_pct: 0.05     # Алерт при просадке портфеля >= N% (0=выкл)
   alert_daily_loss_pct: 0.02   # Алерт при дневном убытке >= N% от старта дня (0=выкл)
   alert_live_ping_hours: 0     # Раз в N ч отправлять «Робот работает» (0=выкл)
+  use_deepseek_advisor: true # true = для инструментов со стратегией deepseek запрашивать рекомендации у DeepSeek API
+  deepseek_model: "deepseek-chat"  # Модель DeepSeek (ключ DEEPSEEK_API_KEY в .env)
 
 risk:
   max_drawdown: 0.15           # Макс. допустимая просадка от пика (15%) — блокировка торговли

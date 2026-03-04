@@ -49,6 +49,7 @@ nano .env
 # TELEGRAM_TOKEN=...
 # TELEGRAM_ADMIN_CHAT_ID=...
 # SANDBOX_TARGET_CASH=120000
+# DEEPSEEK_API_KEY=...   # опционально: для стратегии deepseek (анализ портфеля через DeepSeek API)
 ```
 
 Собрать образ и запустить:

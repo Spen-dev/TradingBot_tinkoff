@@ -130,6 +130,8 @@ class PortfolioConfig:
   alert_drawdown_pct: float = 0.0   # алерт при просадке >= N% (0 = выкл)
   alert_daily_loss_pct: float = 0.0  # алерт при дневном убытке >= N% от старта дня (0 = выкл)
   alert_live_ping_hours: float = 0.0  # раз в N часов отправлять «Робот работает» (0 = выкл)
+  use_deepseek_advisor: bool = False  # использовать DeepSeek для рекомендаций по инструментам со стратегией deepseek
+  deepseek_model: str = "deepseek-chat"
 
 
 @dataclass
@@ -232,6 +234,8 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     alert_drawdown_pct=p_raw.get("alert_drawdown_pct", 0.0),
     alert_daily_loss_pct=p_raw.get("alert_daily_loss_pct", 0.0),
     alert_live_ping_hours=p_raw.get("alert_live_ping_hours", 0.0),
+    use_deepseek_advisor=p_raw.get("use_deepseek_advisor", False),
+    deepseek_model=p_raw.get("deepseek_model", "deepseek-chat"),
   )
   risk_raw = raw.get("risk", {})
   risk_raw.setdefault("pause_after_consecutive_losses", 0)
@@ -261,7 +265,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
 
 VALID_STRATEGIES = (
   "mean_reversion", "momentum", "rsi", "ma_crossover", "breakout",
-  "volume_weighted", "volatility_regime", "index", "time_filter", "adaptive", "rl",
+  "volume_weighted", "volatility_regime", "index", "time_filter", "adaptive", "rl", "deepseek",
 )
 
 

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import json
 import logging
 import math
@@ -12,7 +12,7 @@ from tinkoff.invest import OrderDirection, OrderType
 from .config import InstrumentConfig, PortfolioConfig
 from .broker import TinkoffBroker, Position
 from .risk import RiskManager, RiskState
-from .strategy import build_strategy
+from .strategy import build_strategy, Signal
 from .learned_params import load_learned_params, get_effective_params, get_effective_strategy, get_effective_target_weight
 
 logger = logging.getLogger(__name__)
@@ -244,6 +244,38 @@ class PortfolioManager:
         prices_for_target[figi] = pos.current_price if pos else self.broker.get_last_price(figi)
     targets = self._target_values(equity, prices_for_target)
 
+    # Рекомендации DeepSeek для инструментов со стратегией deepseek
+    deepseek_recommendations: Dict[str, Dict[str, Any]] = {}
+    use_deepseek = getattr(self.cfg, "use_deepseek_advisor", False)
+    instruments_list = list(self.instruments_cfg.values())
+    has_deepseek = any(
+      s == "deepseek" or (isinstance(getattr(c, "strategy", None), list) and "deepseek" in getattr(c, "strategy", []))
+      for c in instruments_list
+    )
+    if use_deepseek and has_deepseek:
+      last_prices = {}
+      for figi in self.instruments_cfg:
+        pos = positions.get(figi)
+        last_prices[figi] = pos.current_price if pos and getattr(pos, "current_price", None) else self.broker.get_last_price(figi)
+      try:
+        from .deepseek_advisor import get_recommendations as get_deepseek_recommendations
+        recs = get_deepseek_recommendations(
+          instruments=instruments_list,
+          positions=positions,
+          equity=equity,
+          cash=cash,
+          last_prices=last_prices,
+          model=getattr(self.cfg, "deepseek_model", "deepseek-chat"),
+        )
+        for figi, r in recs.items():
+          if figi in targets:
+            tw = r.get("target_weight")
+            if tw is not None:
+              targets[figi] = equity * max(0.0, min(1.0, float(tw)))
+        deepseek_recommendations = recs
+      except Exception as e:
+        logger.warning("DeepSeek advisor: %s", e)
+
     # Тейк-профит и трейлинг прибыли: обновить пики, выявить принудительную продажу
     peaks = _load_position_peaks()
     force_sell: set = set()
@@ -356,14 +388,26 @@ class PortfolioManager:
         try:
           effective_strategy = get_effective_strategy(cfg, learned, regime)
           effective_params = get_effective_params(cfg, learned, regime)
-          effective_cfg = InstrumentConfig(
-            figi=cfg.figi, ticker=cfg.ticker, strategy=effective_strategy,
-            target_weight=cfg.target_weight, strategy_params=effective_params,
-            lot=getattr(cfg, "lot", 1) or 1,
+          use_deepseek = (
+            effective_strategy == "deepseek"
+            or (isinstance(effective_strategy, list) and effective_strategy and effective_strategy[0] == "deepseek")
           )
-          strat = build_strategy(effective_strategy, effective_cfg, self.broker)
-          signal = strat.compute_signal(now)
-          logger.debug("Signal %s: %s strength=%.2f", cfg.ticker, signal.side, signal.strength)
+          if use_deepseek:
+            if figi in deepseek_recommendations:
+              rec = deepseek_recommendations[figi]
+              signal = Signal(figi=figi, side=rec.get("action", "hold"), strength=float(rec.get("strength", 0.7)))
+              logger.debug("Signal %s (deepseek): %s strength=%.2f", cfg.ticker, signal.side, signal.strength)
+            else:
+              signal = Signal(figi=figi, side="hold", strength=0.0)
+          else:
+            effective_cfg = InstrumentConfig(
+              figi=cfg.figi, ticker=cfg.ticker, strategy=effective_strategy,
+              target_weight=cfg.target_weight, strategy_params=effective_params,
+              lot=getattr(cfg, "lot", 1) or 1,
+            )
+            strat = build_strategy(effective_strategy, effective_cfg, self.broker)
+            signal = strat.compute_signal(now)
+            logger.debug("Signal %s: %s strength=%.2f", cfg.ticker, signal.side, signal.strength)
         except (ValueError, Exception) as e:
           logger.debug("Strategy error for %s: %s", cfg.ticker, e)
       min_strength = cfg.strategy_params.get("min_strength", 0.0)

@@ -419,6 +419,12 @@ class AdaptiveStrategy(BaseStrategy):
         return Signal(figi=self.instrument.figi, side="hold", strength=0.0)
 
 
+class DeepSeekStubStrategy(BaseStrategy):
+  """Заглушка: сигнал по инструменту со стратегией deepseek формируется в portfolio из API DeepSeek."""
+  def compute_signal(self, now: datetime) -> Signal:
+    return Signal(figi=self.instrument.figi, side="hold", strength=0.0)
+
+
 class RLStrategy(BaseStrategy):
   """Стратегия на признаках RL-окружения. Если задан rl_model_path и файл есть — используется обученная модель (PPO), иначе порог по доходности."""
   def __init__(self, instrument: InstrumentConfig, broker: TinkoffBroker):
@@ -516,6 +522,9 @@ def _build_one(name: str, instrument: InstrumentConfig, broker: TinkoffBroker) -
     return AdaptiveStrategy(instrument, broker)
   if name == "rl":
     return RLStrategy(instrument, broker)
+  if name == "deepseek":
+    # Реальный сигнал формируется в portfolio из DeepSeek API; здесь заглушка для CombinedStrategy и т.п.
+    return DeepSeekStubStrategy(instrument, broker)
   raise ValueError(f"Unknown strategy: {name}")
 
 
