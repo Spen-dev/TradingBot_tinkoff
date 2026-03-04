@@ -10,7 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc \
 # Копируем проект (исключения в .dockerignore)
 COPY . .
 
-# Установка пакета и зависимостей
+# Сначала CPU-версия PyTorch (без CUDA), чтобы не забивать диск на VPS без GPU
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+# Установка пакета и зависимостей (stable-baselines3 подхватит уже установленный torch)
 RUN pip install --no-cache-dir -e .
 
 # Директории для логов и данных
