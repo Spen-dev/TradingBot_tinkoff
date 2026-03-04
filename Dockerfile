@@ -3,9 +3,6 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Зависимости системы (минимально для сборки пакетов)
-RUN apt-get update && apt-get install -y --no-install-recommends gcc \
-    && rm -rf /var/lib/apt/lists/*
 
 # Копируем проект (исключения в .dockerignore)
 COPY . .
