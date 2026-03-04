@@ -45,6 +45,7 @@ class TelegramController:
     self._on_positions: Callable[[], Awaitable[str]] | None = None
     self._on_portfolio: Callable[[], Awaitable[str]] | None = None
     self._on_retrain: Callable[[], Awaitable[str]] | None = None
+    self._on_select_strategy: Callable[[], Awaitable[str]] | None = None
     self._on_pause: Callable[[float], Awaitable[None]] | None = None
     self._on_unpause: Callable[[str], Awaitable[str]] | None = None
     self._on_help_extra: Callable[[], Awaitable[str]] | None = None
@@ -65,6 +66,7 @@ class TelegramController:
     on_positions: Callable[[], Awaitable[str]] | None = None,
     on_portfolio: Callable[[], Awaitable[str]] | None = None,
     on_retrain: Callable[[], Awaitable[str]] | None = None,
+    on_select_strategy: Callable[[], Awaitable[str]] | None = None,
     on_pause: Callable[[float], Awaitable[None]] | None = None,
     on_unpause: Callable[[str], Awaitable[str]] | None = None,
     on_help_extra: Callable[[], Awaitable[str]] | None = None,
@@ -83,6 +85,7 @@ class TelegramController:
     self._on_positions = on_positions
     self._on_portfolio = on_portfolio
     self._on_retrain = on_retrain
+    self._on_select_strategy = on_select_strategy
     self._on_pause = on_pause
     self._on_unpause = on_unpause
     self._on_help_extra = on_help_extra
@@ -98,6 +101,7 @@ class TelegramController:
       "/status — текущий статус (портфель, риск, разрешена ли торговля)\n"
       "/rebalance — ручной ребаланс (выставить заявки по текущим сигналам)\n"
       "/retrain — запуск самообучения (пересчёт параметров стратегий)\n"
+      "/select_strategy — выбор лучшей стратегии по бэктесту для каждого инструмента\n"
       "/pause [часы] — пауза торговли на N часов (по умолчанию 24)\n"
       "/unpause <тикер> — снять паузу по инструменту, например /unpause VTBR\n"
       "/last_errors — последние строки из лога (ошибки)\n"
@@ -245,6 +249,17 @@ class TelegramController:
         await self.answer_chunked(msg, res)
       else:
         await msg.answer("Самообучение не настроено")
+
+    @self.dp.message(Command("select_strategy"))
+    async def cmd_select_strategy(msg: types.Message):
+      if msg.chat.id != self.admin_chat_id:
+        return
+      if self._on_select_strategy:
+        await msg.answer("Выбор лучшей стратегии…")
+        res = await self._on_select_strategy()
+        await self.answer_chunked(msg, res)
+      else:
+        await msg.answer("Не настроено.")
 
     @self.dp.message(Command("pause"))
     async def cmd_pause(msg: types.Message):

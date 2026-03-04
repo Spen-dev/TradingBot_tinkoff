@@ -85,6 +85,8 @@ portfolio:
   alert_live_ping_hours: 0     # Раз в N ч отправлять «Робот работает» (0=выкл)
   use_deepseek_advisor: true # true = для инструментов со стратегией deepseek запрашивать рекомендации у DeepSeek API
   deepseek_model: "deepseek-chat"  # Модель DeepSeek (ключ DEEPSEEK_API_KEY в .env)
+  auto_strategy_selection_on_start: true # true = при старте выбрать лучшую стратегию по бэктесту для каждого инструмента
+  strategy_selection_days: 90    # глубина истории (дней) для выбора стратегии
 
 risk:
   max_drawdown: 0.15           # Макс. допустимая просадка от пика (15%) — блокировка торговли

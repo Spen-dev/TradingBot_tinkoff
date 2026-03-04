@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -179,6 +180,149 @@ def _get_signals_for_df(
     except Exception:
       signals.append(Signal(figi=instrument.figi, side="hold", strength=0.0))
   return signals
+
+
+# Стратегии, по которым выбираем лучшую по бэктесту
+STRATEGY_CANDIDATES = ["momentum", "mean_reversion", "rsi", "breakout", "adaptive"]
+
+
+def _score_deepseek_vs_validation(
+  inst: InstrumentConfig,
+  df_val: pd.DataFrame,
+  rec: Dict[str, Any],
+) -> Tuple[float, float]:
+  """Оценка рекомендации DeepSeek по совпадению с движением цены на валидации. Возвращает (combined_score, display_value)."""
+  if len(df_val) < 2:
+    return -1e9, 0.0
+  val_return = float(df_val["close"].iloc[-1] / df_val["close"].iloc[0] - 1.0)
+  action = (rec.get("action") or "hold").lower()
+  if action == "hold":
+    score = 0.5
+    display = 0.0
+  elif action == "buy":
+    score = 0.5 + 0.5 * (1.0 if val_return > 0 else -1.0)
+    display = val_return
+  elif action == "sell":
+    score = 0.5 + 0.5 * (1.0 if val_return < 0 else -1.0)
+    display = -val_return
+  else:
+    score = 0.5
+    display = 0.0
+  combined = (score - 0.5) * 2.0
+  return combined, display
+
+
+def run_strategy_selection(
+  broker: TinkoffBroker,
+  instruments: List[InstrumentConfig],
+  days: int = 90,
+  commission_rate: float = 0.0003,
+  train_ratio: float = 0.7,
+  use_sharpe: bool = True,
+  min_trades: int = 5,
+  risk_penalty: float = 0.5,
+  allow_deepseek: bool = False,
+  deepseek_model: str = "deepseek-chat",
+) -> str:
+  """Для каждого инструмента перебирает стратегии (бэктест + опционально DeepSeek), выбирает лучшую и пишет в learned_params['strategy']."""
+  to_dt = datetime.now()
+  from_dt = to_dt - timedelta(days=days)
+  lines = ["Выбор стратегий завершён."]
+  grid = DEFAULT_GRID
+  deepseek_recs: Dict[str, Dict[str, Any]] = {}
+  if allow_deepseek:
+    try:
+      positions = broker.get_portfolio()
+      cash = broker.get_cash_balance()
+      equity = cash + sum(getattr(p, "value", 0) for p in positions.values())
+      last_prices: Dict[str, float] = {}
+      for i in instruments:
+        pos = positions.get(i.figi)
+        last_prices[i.figi] = getattr(pos, "current_price", None) or broker.get_last_price(i.figi) or 0.0
+      from .deepseek_advisor import get_recommendations as get_deepseek_recommendations
+      deepseek_recs = get_deepseek_recommendations(
+        instruments=instruments,
+        positions=positions,
+        equity=equity,
+        cash=cash,
+        last_prices=last_prices,
+        model=deepseek_model,
+      )
+    except Exception as e:
+      logger.warning("DeepSeek при выборе стратегий: %s", e)
+  for inst in instruments:
+    try:
+      df = broker.get_historical_candles(inst.figi, from_dt, to_dt)
+    except Exception as e:
+      logger.warning("Не удалось загрузить свечи для %s: %s", inst.ticker, e)
+      lines.append(f"  {inst.ticker}: нет данных")
+      continue
+    if len(df) < 40:
+      lines.append(f"  {inst.ticker}: мало свечей ({len(df)})")
+      continue
+    split = int(len(df) * max(0.5, min(0.9, train_ratio)))
+    df_train = df.iloc[:split]
+    df_val = df.iloc[split:]
+    candidates = list(STRATEGY_CANDIDATES)
+    if isinstance(inst.strategy_params, dict) and inst.strategy_params.get("rl_model_path"):
+      rl_path = Path(inst.strategy_params["rl_model_path"])
+      if rl_path.exists():
+        candidates.append("rl")
+    if allow_deepseek and inst.figi in deepseek_recs:
+      candidates.append("deepseek")
+    best_name: Optional[str] = None
+    best_score = -1e9
+    best_sharpe = 0.0
+    for strat_name in candidates:
+      try:
+        if strat_name == "deepseek":
+          rec = deepseek_recs.get(inst.figi)
+          if not rec:
+            continue
+          combined, display_val = _score_deepseek_vs_validation(inst, df_val, rec)
+          if combined > best_score:
+            best_score = combined
+            best_name = "deepseek"
+            best_sharpe = display_val
+          continue
+        params: Dict[str, Any] = {"strategy": strat_name}
+        for key, vals in grid.items():
+          if key != "strategy" and vals and key not in params:
+            params[key] = vals[0]
+        sig_train = _get_signals_for_df(broker, inst, df_train, params)
+        sig_val = _get_signals_for_df(broker, inst, df_val, params)
+        _, dd_t, nt_t, ret_t = _simulate_pnl_and_dd(df_train, sig_train, commission_rate)
+        _, dd_v, nt_v, ret_v = _simulate_pnl_and_dd(df_val, sig_val, commission_rate)
+        if nt_t < min_trades or nt_v < min_trades:
+          continue
+        if use_sharpe:
+          sh_t = _compute_sharpe(ret_t)
+          sh_v = _compute_sharpe(ret_v)
+          score_t = sh_t - risk_penalty * dd_t
+          score_v = sh_v - risk_penalty * dd_v
+        else:
+          pnl_t, _, _, _ = _simulate_pnl_and_dd(df_train, sig_train, commission_rate)
+          pnl_v, _, _, _ = _simulate_pnl_and_dd(df_val, sig_val, commission_rate)
+          score_t = pnl_t - risk_penalty * dd_t
+          score_v = pnl_v - risk_penalty * dd_v
+          sh_v = pnl_v
+        combined = 0.5 * score_t + 0.5 * score_v
+        if combined > best_score:
+          best_score = combined
+          best_name = strat_name
+          best_sharpe = _compute_sharpe(ret_v) if use_sharpe else sh_v
+      except Exception as e:
+        logger.debug("Стратегия %s для %s: %s", strat_name, inst.ticker, e)
+        continue
+    if best_name:
+      update_learned_params(inst.figi, {"strategy": best_name})
+      if best_name == "deepseek":
+        lines.append(f"  {inst.ticker}: deepseek (совпадение с валидацией)")
+      else:
+        lines.append(f"  {inst.ticker}: {best_name} (Sharpe≈{best_sharpe:.3f})")
+    else:
+      lines.append(f"  {inst.ticker}: не выбрана (мало сделок или ошибки)")
+  return "\n".join(lines)
 
 
 def tune_instrument_params(
@@ -358,15 +502,31 @@ def run_retrain(
   weight_cap: float = 0.4,
   atr_period: int = 14,
   tune_by_regime: bool = False,
+  run_strategy_selection_first: bool = False,
+  strategy_selection_days: int = 90,
 ) -> str:
-  """Самообучение по всем инструментам. tune_by_regime: подбор отдельно для тренда и флэта (strategy_trend/params_trend, strategy_range/params_range)."""
+  """Самообучение по всем инструментам. tune_by_regime: подбор отдельно для тренда и флэта. run_strategy_selection_first: сначала выбрать лучшую стратегию, затем подбирать параметры для неё."""
   effective_penalty = risk_penalty * risk_penalty_mult
+  if run_strategy_selection_first:
+    run_strategy_selection(
+      broker, instruments, days=strategy_selection_days,
+      commission_rate=commission_rate, train_ratio=train_ratio,
+      use_sharpe=use_sharpe, min_trades=min_trades, risk_penalty=effective_penalty,
+    )
   lines = ["Самообучение завершено."]
   results: List[Tuple[InstrumentConfig, Dict[str, Any], float, List[float]]] = []
+  learned = load_learned_params()
   for inst in instruments:
     try:
+      eff = learned.get(inst.figi, {}).get("strategy", inst.strategy)
+      eff_strategy = eff if isinstance(eff, str) else (eff[0] if isinstance(eff, list) and eff else "adaptive")
+      inst_for_tune = InstrumentConfig(
+        figi=inst.figi, ticker=inst.ticker, strategy=eff_strategy,
+        target_weight=inst.target_weight, strategy_params=dict(inst.strategy_params or {}),
+        lot=getattr(inst, "lot", 1) or 1,
+      )
       best = tune_instrument_params(
-        broker, inst, days=days,
+        broker, inst_for_tune, days=days,
         risk_penalty=effective_penalty,
         commission_rate=commission_rate,
         train_ratio=train_ratio,

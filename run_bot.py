@@ -352,6 +352,26 @@ async def main() -> None:
       logger.exception("on_rebalance: %s", e)
       return f"Ошибка ребаланса: {e}"
 
+  async def on_select_strategy() -> str:
+    try:
+      from tinkoff_bot.self_learn import run_strategy_selection
+      days = getattr(cfg.portfolio, "strategy_selection_days", 90) or 90
+      comm = getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003
+      return run_strategy_selection(
+        broker, cfg.instruments, days=days,
+        commission_rate=comm,
+        train_ratio=getattr(cfg.portfolio, "self_learn_train_ratio", 0.7) or 0.7,
+        use_sharpe=getattr(cfg.portfolio, "self_learn_use_sharpe", True),
+        min_trades=getattr(cfg.portfolio, "self_learn_min_trades", 5) or 5,
+        risk_penalty=getattr(cfg.portfolio, "self_learn_risk_penalty", 0.5) or 0.5,
+        allow_deepseek=getattr(cfg.portfolio, "use_deepseek_advisor", False),
+        deepseek_model=getattr(cfg.portfolio, "deepseek_model", "deepseek-chat"),
+      )
+    except Exception as e:
+      inc_error()
+      logger.exception("on_select_strategy: %s", e)
+      return f"Ошибка выбора стратегии: {e}"
+
   async def on_retrain() -> str:
     try:
       from tinkoff_bot.self_learn import run_retrain
@@ -441,6 +461,7 @@ async def main() -> None:
     on_positions=on_positions,
     on_portfolio=on_portfolio,
     on_retrain=on_retrain,
+    on_select_strategy=on_select_strategy,
     on_pause=on_pause,
     on_unpause=on_unpause,
     on_help_extra=on_help_extra,
@@ -478,6 +499,8 @@ async def main() -> None:
     last_digest_date: date | None = None
     last_rl_train_date: date | None = None
     rl_train_start_done = False
+    strategy_selection_start_done = False
+    auto_strategy_selection_on_start = getattr(cfg.portfolio, "auto_strategy_selection_on_start", False)
     last_day_reset_date: date | None = None
     last_weekly_report_date: date | None = None
     last_alert_drawdown_date: date | None = None
@@ -521,6 +544,28 @@ async def main() -> None:
       now = datetime.now()
       if not started:
         continue
+      if auto_strategy_selection_on_start and not strategy_selection_start_done:
+        strategy_selection_start_done = True
+        try:
+          from tinkoff_bot.self_learn import run_strategy_selection
+          loop = asyncio.get_event_loop()
+          sel_days = getattr(cfg.portfolio, "strategy_selection_days", 90) or 90
+          res = await loop.run_in_executor(
+            None,
+            lambda: run_strategy_selection(
+              broker, cfg.instruments, days=sel_days,
+              commission_rate=getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003,
+              train_ratio=getattr(cfg.portfolio, "self_learn_train_ratio", 0.7) or 0.7,
+              use_sharpe=getattr(cfg.portfolio, "self_learn_use_sharpe", True),
+              min_trades=getattr(cfg.portfolio, "self_learn_min_trades", 5) or 5,
+              risk_penalty=getattr(cfg.portfolio, "self_learn_risk_penalty", 0.5) or 0.5,
+              allow_deepseek=getattr(cfg.portfolio, "use_deepseek_advisor", False),
+              deepseek_model=getattr(cfg.portfolio, "deepseek_model", "deepseek-chat"),
+            ),
+          )
+          await send_alert(tg, "📊 Выбор стратегий при старте:\n" + res, "strategy_selection", force=True)
+        except Exception as e:
+          logger.exception("Strategy selection on start: %s", e)
       if alert_live_ping_hours > 0:
         if last_live_ping is None:
           last_live_ping = now

@@ -132,6 +132,8 @@ class PortfolioConfig:
   alert_live_ping_hours: float = 0.0  # раз в N часов отправлять «Робот работает» (0 = выкл)
   use_deepseek_advisor: bool = False  # использовать DeepSeek для рекомендаций по инструментам со стратегией deepseek
   deepseek_model: str = "deepseek-chat"
+  auto_strategy_selection_on_start: bool = False  # при старте робота один раз выбрать лучшую стратегию по бэктесту для каждого инструмента
+  strategy_selection_days: int = 90  # глубина истории (дней) для выбора стратегии
 
 
 @dataclass
@@ -236,6 +238,8 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     alert_live_ping_hours=p_raw.get("alert_live_ping_hours", 0.0),
     use_deepseek_advisor=p_raw.get("use_deepseek_advisor", False),
     deepseek_model=p_raw.get("deepseek_model", "deepseek-chat"),
+    auto_strategy_selection_on_start=p_raw.get("auto_strategy_selection_on_start", False),
+    strategy_selection_days=p_raw.get("strategy_selection_days", 90),
   )
   risk_raw = raw.get("risk", {})
   risk_raw.setdefault("pause_after_consecutive_losses", 0)
