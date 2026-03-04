@@ -33,7 +33,7 @@ portfolio:
   request_timeout_seconds: 30     # Таймаут вызовов брокера в планировщике и watchdog (сек)
   trading_enabled: true        # Разрешить выставление заявок (false = только мониторинг)
   alert_cooldown_minutes: 30   # Минимальный интервал между однотипными алертами (мин)
-  no_trades_alert_hours: 48    # Алерт «нет сделок» после N часов (0 = выкл)
+  no_trades_alert_hours: 72    # Алерт «нет сделок» после N часов (песочница как в бою)
   daily_digest_time: "18:00"   # Время ежедневного дайджеста (ЧЧ:ММ)
   rl_train_on_start: true      # Обучать RL-модели при старте робота
   rl_train_interval_days: 14   # Периодическое переобучение RL раз в N дней (0 = только при старте)
@@ -66,15 +66,15 @@ portfolio:
   market_panic_drop_pct: 0.05  # Дневное падение индекса (доля) — глобальная пауза до конца дня
   market_vol_low_threshold_pct: 0.01   # |изменение индекса| ниже — низкая волатильность
   market_vol_high_threshold_pct: 0.03  # |изменение индекса| выше — высокая волатильность
-  single_trade_max_pct: 0.0    # Макс. доля одной сделки от equity (0 = не ограничивать)
-  max_position_pct: 0.0        # Макс. доля одной позиции от equity (0 = не ограничивать)
+  single_trade_max_pct: 0.10   # Макс. доля одной сделки от equity (как в бою)
+  max_position_pct: 0.25       # Макс. доля одной позиции от equity (как в бою)
   hold_timeout_days: 0         # Принудительно сбрасывать позицию после N дней (0 = выкл)
-  instrument_pause_after_losses: 0   # Пауза по инструменту после N убыточных сделок подряд (0=выкл)
+  instrument_pause_after_losses: 3   # Пауза по инструменту после N убыточных сделок подряд (как в бою)
   instrument_pause_hours: 24.0 # Длительность паузы по инструменту (ч)
   signal_confirmation_candles: 0     # Требовать N свечей в направлении сигнала (0=выкл)
   weekly_report_weekday: 6     # День недели недельного отчёта (0=Пн, 6=Вс)
   weekly_report_time: "18:00"  # Время отправки недельного отчёта
-  use_candle_cache: false     # Кэшировать свечи на диске
+  use_candle_cache: true      # Кэшировать свечи (меньше запросов к брокеру, как в бою)
   candle_cache_days: 60        # Срок хранения кэша свечей (дней)
   gap_risk_enabled: true     # Учитывать риск гэпов (не открывать у «гэповых» бумаг к концу дня)
   gap_min_pct: 0.03            # Минимальный гэп (доля) для признания бумаги гэповой
@@ -82,11 +82,17 @@ portfolio:
   no_new_orders_before_end_minutes: 30  # В последние N мин окна не выставлять новые лимитные покупки (0=выкл)
   alert_drawdown_pct: 0.05     # Алерт при просадке портфеля >= N% (0=выкл)
   alert_daily_loss_pct: 0.02   # Алерт при дневном убытке >= N% от старта дня (0=выкл)
-  alert_live_ping_hours: 0     # Раз в N ч отправлять «Робот работает» (0=выкл)
+  alert_live_ping_hours: 24    # Раз в N ч отправлять «Робот работает» (песочница как в бою)
   use_deepseek_advisor: true # true = для инструментов со стратегией deepseek запрашивать рекомендации у DeepSeek API
   deepseek_model: "deepseek-chat"  # Модель DeepSeek (ключ DEEPSEEK_API_KEY в .env)
   auto_strategy_selection_on_start: true # true = при старте выбрать лучшую стратегию по бэктесту для каждого инструмента
   strategy_selection_days: 90    # глубина истории (дней) для выбора стратегии
+  strategy_selection_interval_days: 14  # пересчёт выбора стратегии раз в N дней (0 = только при старте и /select_strategy)
+  strategy_change_min_delta: 0.05  # не менять стратегию, если прирост оценки меньше порога
+  strategy_diversity_max_share: 0.5  # макс. доля портфеля у одной стратегии, 0 = не ограничивать
+  deepseek_cache_hours: 2.0  # кэш рекомендаций DeepSeek (часы), 0 = не кэшировать
+  deepseek_history_days: 10  # дней истории в контексте для DeepSeek (доходность, волатильность)
+  rebalance_decisions_log: true  # писать в data/logs/rebalance_decisions.log решения ребаланса
 
 risk:
   max_drawdown: 0.15           # Макс. допустимая просадка от пика (15%) — блокировка торговли

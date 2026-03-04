@@ -22,6 +22,30 @@ _DATA_DIR = _BASE_DIR / "data"
 LAST_TRADES_FILE = _DATA_DIR / "last_trades.json"
 POSITION_PEAKS_FILE = _DATA_DIR / "position_peaks.json"
 AUDIT_ORDERS_FILE = _DATA_DIR / "audit_orders.log"
+REBALANCE_DECISIONS_FILE = _DATA_DIR / "logs" / "rebalance_decisions.log"
+
+
+def _log_rebalance_decisions(
+  equity: float,
+  entries: List[Dict[str, Any]],
+  orders: List["RebalanceOrder"],
+) -> None:
+  """Запись решений ребаланса: по инструментам (стратегия, сигнал, целевая/текущая сумма) и заявки."""
+  try:
+    REBALANCE_DECISIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().isoformat()
+    lines = [f"# {ts} equity={equity:.0f} RUB", ""]
+    for e in entries:
+      lines.append(f"  {e.get('ticker', '')}: strategy={e.get('strategy', '')} signal={e.get('signal', '')} target={e.get('target_rub', 0):.0f} current={e.get('current_rub', 0):.0f}")
+    lines.append("")
+    for o in orders:
+      dir_str = "BUY" if o.direction == OrderDirection.ORDER_DIRECTION_BUY else "SELL"
+      lines.append(f"  ORDER {o.ticker} {dir_str} qty={o.quantity} price={o.execution_price:.2f} strategy={getattr(o, 'strategy_used', '')}")
+    lines.append("")
+    with open(REBALANCE_DECISIONS_FILE, "a", encoding="utf-8") as f:
+      f.write("\n".join(lines))
+  except Exception as e:
+    logger.debug("rebalance_decisions log: %s", e)
 
 
 def _audit_order(action: str, figi: str, ticker: str, direction: str, quantity: int, price: float, order_id: str = "") -> None:
@@ -257,6 +281,39 @@ class PortfolioManager:
       for figi in self.instruments_cfg:
         pos = positions.get(figi)
         last_prices[figi] = pos.current_price if pos and getattr(pos, "current_price", None) else self.broker.get_last_price(figi)
+      history_summary: Optional[Dict[str, str]] = None
+      history_days = getattr(self.cfg, "deepseek_history_days", 0) or 0
+      if history_days > 0:
+        to_dt = datetime.now()
+        from_dt = to_dt - timedelta(days=history_days)
+        history_summary = {}
+        for ins in instruments_list:
+          try:
+            df = self.broker.get_historical_candles(ins.figi, from_dt, to_dt)
+            if df is not None and len(df) >= 2 and "close" in df.columns:
+              close = df["close"]
+              r5 = (float(close.iloc[-1]) / float(close.iloc[-min(5, len(close))]) - 1) * 100 if len(close) >= 5 else 0
+              r10 = (float(close.iloc[-1]) / float(close.iloc[0]) - 1) * 100
+              high = df["high"].values if "high" in df.columns else close.values
+              low = df["low"].values if "low" in df.columns else close.values
+              peak = float(close.iloc[0])
+              dd = 0.0
+              for i in range(len(close)):
+                p = float(close.iloc[i])
+                peak = max(peak, p)
+                if peak > 0:
+                  dd = max(dd, (peak - p) / peak * 100)
+              atr_pct = 0.0
+              if len(close) >= 14 and "high" in df.columns and "low" in df.columns:
+                prev = close.shift(1).bfill().values
+                tr = np.maximum(high - low, np.maximum(np.abs(high - prev), np.abs(low - prev)))
+                atr = float(np.mean(tr[-14:])) if len(tr) >= 14 else 0
+                atr_pct = (atr / float(close.iloc[-1]) * 100) if close.iloc[-1] else 0
+              history_summary[ins.ticker] = f"return_5d={r5:.1f}% return_10d={r10:.1f}% atr_pct={atr_pct:.1f}% dd_10d={dd:.1f}%"
+            else:
+              history_summary[ins.ticker] = "нет данных"
+          except Exception:
+            history_summary[getattr(ins, "ticker", "")] = "ошибка"
       try:
         from .deepseek_advisor import get_recommendations as get_deepseek_recommendations
         recs = get_deepseek_recommendations(
@@ -266,6 +323,8 @@ class PortfolioManager:
           cash=cash,
           last_prices=last_prices,
           model=getattr(self.cfg, "deepseek_model", "deepseek-chat"),
+          cache_hours=getattr(self.cfg, "deepseek_cache_hours", 0) or 0,
+          history_summary=history_summary,
         )
         for figi, r in recs.items():
           if figi in targets:
@@ -379,11 +438,13 @@ class PortfolioManager:
         gap_risky[figi] = False
         return False
 
+    rebalance_log_entries: List[Dict[str, Any]] = []
     for figi, cfg in self.instruments_cfg.items():
       if instrument_is_paused(figi):
         continue
       regime = regimes.get(figi)
       signal = None
+      strategy_used = "—"
       if getattr(cfg, "strategy", None):
         try:
           effective_strategy = get_effective_strategy(cfg, learned, regime)
@@ -399,6 +460,7 @@ class PortfolioManager:
               logger.debug("Signal %s (deepseek): %s strength=%.2f", cfg.ticker, signal.side, signal.strength)
             else:
               signal = Signal(figi=figi, side="hold", strength=0.0)
+            strategy_used = "deepseek"
           else:
             effective_cfg = InstrumentConfig(
               figi=cfg.figi, ticker=cfg.ticker, strategy=effective_strategy,
@@ -407,6 +469,7 @@ class PortfolioManager:
             )
             strat = build_strategy(effective_strategy, effective_cfg, self.broker)
             signal = strat.compute_signal(now)
+            strategy_used = str(effective_strategy) if isinstance(effective_strategy, str) else "combined"
             logger.debug("Signal %s: %s strength=%.2f", cfg.ticker, signal.side, signal.strength)
         except (ValueError, Exception) as e:
           logger.debug("Strategy error for %s: %s", cfg.ticker, e)
@@ -460,6 +523,14 @@ class PortfolioManager:
       vol_factor = _volatility_factor(self.broker, figi, atr_period, atr_percentile_days)
       vol_filter = _volume_factor(self.broker, figi, volume_min_ratio)
       target_value = base_target * strength_mult * vol_factor * vol_filter
+      if getattr(self.cfg, "rebalance_decisions_log", True):
+        rebalance_log_entries.append({
+          "ticker": cfg.ticker,
+          "strategy": strategy_used,
+          "signal": signal.side if signal else "hold",
+          "target_rub": round(target_value, 0),
+          "current_rub": round(current_value, 0),
+        })
       diff = target_value - current_value
       if abs(diff) / max(equity, 1e-9) < 0.01:
         continue
@@ -505,8 +576,6 @@ class PortfolioManager:
       cost = qty * price
       if signal_confirmation_candles > 0 and not _signal_confirmed(self.broker, figi, direction, signal_confirmation_candles):
         continue
-      eff_s = get_effective_strategy(cfg, learned, regime)
-      strategy_used = str(eff_s) if isinstance(eff_s, str) else "combined"
       order = RebalanceOrder(
         figi=figi, ticker=cfg.ticker, quantity=qty, direction=direction,
         execution_price=price, signal_strength=strength, strategy_used=strategy_used,
@@ -519,7 +588,10 @@ class PortfolioManager:
 
     # Сначала продажи, потом покупки (от дешёвых к дорогим)
     pending_buys.sort(key=lambda o: o.quantity * o.execution_price)
-    return sells + pending_buys
+    all_orders = sells + pending_buys
+    if getattr(self.cfg, "rebalance_decisions_log", True) and rebalance_log_entries:
+      _log_rebalance_decisions(equity, rebalance_log_entries, all_orders)
+    return all_orders
 
   def execute_rebalance(self, day_start_equity: float) -> List[dict]:
     orders = self.build_rebalance_orders(day_start_equity)

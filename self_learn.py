@@ -223,12 +223,17 @@ def run_strategy_selection(
   risk_penalty: float = 0.5,
   allow_deepseek: bool = False,
   deepseek_model: str = "deepseek-chat",
-) -> str:
-  """Для каждого инструмента перебирает стратегии (бэктест + опционально DeepSeek), выбирает лучшую и пишет в learned_params['strategy']."""
+  strategy_change_min_delta: float = 0.05,
+  strategy_diversity_max_share: float = 0.0,
+) -> Tuple[str, List[Tuple[str, str, str]]]:
+  """Для каждого инструмента перебирает стратегии, выбирает лучшую, пишет в learned_params. Возвращает (сообщение, список (ticker, old_strategy, new_strategy))."""
   to_dt = datetime.now()
   from_dt = to_dt - timedelta(days=days)
   lines = ["Выбор стратегий завершён."]
   grid = DEFAULT_GRID
+  learned_before = load_learned_params()
+  changes: List[Tuple[str, str, str]] = []
+  weight_by_strategy: Dict[str, float] = {}
   deepseek_recs: Dict[str, Dict[str, Any]] = {}
   if allow_deepseek:
     try:
@@ -270,20 +275,35 @@ def run_strategy_selection(
         candidates.append("rl")
     if allow_deepseek and inst.figi in deepseek_recs:
       candidates.append("deepseek")
+    eff = learned_before.get(inst.figi, {}).get("strategy", inst.strategy)
+    current_strategy = eff if isinstance(eff, str) else (eff[0] if isinstance(eff, list) and eff else "adaptive")
+    tw = getattr(inst, "target_weight", 1.0 / max(len(instruments), 1))
     best_name: Optional[str] = None
     best_score = -1e9
     best_sharpe = 0.0
+    current_score = -1e9
     for strat_name in candidates:
       try:
+        if strategy_diversity_max_share > 0:
+          would_be = weight_by_strategy.get(strat_name, 0) + tw
+          if would_be > strategy_diversity_max_share:
+            diversity_penalty = 0.2
+          else:
+            diversity_penalty = 0.0
+        else:
+          diversity_penalty = 0.0
         if strat_name == "deepseek":
           rec = deepseek_recs.get(inst.figi)
           if not rec:
             continue
           combined, display_val = _score_deepseek_vs_validation(inst, df_val, rec)
+          combined -= diversity_penalty
           if combined > best_score:
             best_score = combined
             best_name = "deepseek"
             best_sharpe = display_val
+          if strat_name == current_strategy:
+            current_score = combined
           continue
         params: Dict[str, Any] = {"strategy": strat_name}
         for key, vals in grid.items():
@@ -306,23 +326,30 @@ def run_strategy_selection(
           score_t = pnl_t - risk_penalty * dd_t
           score_v = pnl_v - risk_penalty * dd_v
           sh_v = pnl_v
-        combined = 0.5 * score_t + 0.5 * score_v
+        combined = 0.5 * score_t + 0.5 * score_v - diversity_penalty
         if combined > best_score:
           best_score = combined
           best_name = strat_name
           best_sharpe = _compute_sharpe(ret_v) if use_sharpe else sh_v
+        if strat_name == current_strategy:
+          current_score = combined
       except Exception as e:
         logger.debug("Стратегия %s для %s: %s", strat_name, inst.ticker, e)
         continue
     if best_name:
-      update_learned_params(inst.figi, {"strategy": best_name})
+      should_switch = best_name != current_strategy and (best_score - current_score) >= strategy_change_min_delta
+      chosen = best_name if should_switch else current_strategy
+      if should_switch:
+        update_learned_params(inst.figi, {"strategy": best_name})
+        changes.append((inst.ticker, current_strategy, best_name))
+      weight_by_strategy[chosen] = weight_by_strategy.get(chosen, 0) + tw
       if best_name == "deepseek":
         lines.append(f"  {inst.ticker}: deepseek (совпадение с валидацией)")
       else:
         lines.append(f"  {inst.ticker}: {best_name} (Sharpe≈{best_sharpe:.3f})")
     else:
       lines.append(f"  {inst.ticker}: не выбрана (мало сделок или ошибки)")
-  return "\n".join(lines)
+  return "\n".join(lines), changes
 
 
 def tune_instrument_params(

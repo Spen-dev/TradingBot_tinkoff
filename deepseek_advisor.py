@@ -6,9 +6,12 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, List
+import time
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+_deepseek_cache: Optional[tuple] = None  # (result_dict, timestamp)
 
 
 def get_recommendations(
@@ -18,18 +21,24 @@ def get_recommendations(
   cash: float,
   last_prices: Dict[str, float],
   model: str = "deepseek-chat",
+  cache_hours: float = 0.0,
+  history_summary: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
   """
   Запрос к DeepSeek API: по текущему портфелю и ценам возвращает рекомендации по каждому тикеру.
-  Возвращает: { figi: {"action": "buy"|"sell"|"hold", "target_weight": float, "strength": float} }.
-  При ошибке или отсутствии ключа — пустой dict.
+  cache_hours > 0: возвращать кэшированный результат, если не старше cache_hours часов.
+  history_summary: опционально {ticker: "return_5d=..., atr_pct=..., dd_10d=..."} для контекста.
   """
+  global _deepseek_cache
+  if cache_hours > 0 and _deepseek_cache is not None:
+    cached, ts = _deepseek_cache
+    if (time.time() - ts) < cache_hours * 3600:
+      return dict(cached)
   api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
   if not api_key:
     logger.debug("DEEPSEEK_API_KEY не задан, советник DeepSeek отключён")
     return {}
 
-  # Собираем сводку по инструментам
   lines = [
     f"Портфель: equity={equity:.0f} RUB, cash={cash:.0f} RUB.",
     "Инструменты (тикер, FIGI, целевой вес из конфига, текущая позиция RUB, цена):",
@@ -43,6 +52,10 @@ def get_recommendations(
     price = last_prices.get(figi, 0.0) or (getattr(pos, "current_price", None) if pos else 0.0)
     lines.append(f"  {ticker} (FIGI={figi[:12]}...): target_weight={tw:.2f}, position_value={value:.0f}, price={price:.2f}")
   context = "\n".join(lines)
+  if history_summary:
+    context += "\n\nИстория по инструментам (доходность, волатильность, просадка за период):\n"
+    for ticker, summary in history_summary.items():
+      context += f"  {ticker}: {summary}\n"
 
   prompt = f"""Ты — консультант по управлению портфелем акций на российском рынке. Данные текущего состояния:
 
@@ -88,6 +101,8 @@ def get_recommendations(
       strength = float(r.get("strength", 0.7))
       strength = max(0.3, min(1.0, strength))
       out[figi] = {"action": action, "target_weight": tw, "strength": strength}
+    if cache_hours > 0:
+      _deepseek_cache = (out, time.time())
     return out
   except Exception as e:
     logger.warning("DeepSeek advisor: %s", e)

@@ -134,6 +134,12 @@ class PortfolioConfig:
   deepseek_model: str = "deepseek-chat"
   auto_strategy_selection_on_start: bool = False  # при старте робота один раз выбрать лучшую стратегию по бэктесту для каждого инструмента
   strategy_selection_days: int = 90  # глубина истории (дней) для выбора стратегии
+  strategy_selection_interval_days: int = 0  # пересчёт выбора стратегии раз в N дней (0 = только при старте и вручную)
+  strategy_change_min_delta: float = 0.05  # не менять стратегию, если прирост оценки меньше этого порога
+  strategy_diversity_max_share: float = 0.0  # макс. доля портфеля у одной стратегии, 0 = не ограничивать (0.5 = 50%)
+  deepseek_cache_hours: float = 2.0  # кэш рекомендаций DeepSeek (часы), 0 = не кэшировать
+  deepseek_history_days: int = 10  # дней истории (доходность, волатильность) в контексте для DeepSeek
+  rebalance_decisions_log: bool = True  # писать в лог решения ребаланса (стратегия, сигнал, заявки)
 
 
 @dataclass
@@ -240,6 +246,12 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     deepseek_model=p_raw.get("deepseek_model", "deepseek-chat"),
     auto_strategy_selection_on_start=p_raw.get("auto_strategy_selection_on_start", False),
     strategy_selection_days=p_raw.get("strategy_selection_days", 90),
+    strategy_selection_interval_days=p_raw.get("strategy_selection_interval_days", 0),
+    strategy_change_min_delta=p_raw.get("strategy_change_min_delta", 0.05),
+    strategy_diversity_max_share=p_raw.get("strategy_diversity_max_share", 0.0),
+    deepseek_cache_hours=p_raw.get("deepseek_cache_hours", 2.0),
+    deepseek_history_days=p_raw.get("deepseek_history_days", 10),
+    rebalance_decisions_log=p_raw.get("rebalance_decisions_log", True),
   )
   risk_raw = raw.get("risk", {})
   risk_raw.setdefault("pause_after_consecutive_losses", 0)

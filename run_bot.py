@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import signal
@@ -357,7 +358,7 @@ async def main() -> None:
       from tinkoff_bot.self_learn import run_strategy_selection
       days = getattr(cfg.portfolio, "strategy_selection_days", 90) or 90
       comm = getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003
-      return run_strategy_selection(
+      msg, changes = run_strategy_selection(
         broker, cfg.instruments, days=days,
         commission_rate=comm,
         train_ratio=getattr(cfg.portfolio, "self_learn_train_ratio", 0.7) or 0.7,
@@ -366,7 +367,12 @@ async def main() -> None:
         risk_penalty=getattr(cfg.portfolio, "self_learn_risk_penalty", 0.5) or 0.5,
         allow_deepseek=getattr(cfg.portfolio, "use_deepseek_advisor", False),
         deepseek_model=getattr(cfg.portfolio, "deepseek_model", "deepseek-chat"),
+        strategy_change_min_delta=getattr(cfg.portfolio, "strategy_change_min_delta", 0.05) or 0,
+        strategy_diversity_max_share=getattr(cfg.portfolio, "strategy_diversity_max_share", 0) or 0,
       )
+      if changes:
+        await send_alert(tg, "📊 Смена стратегий: " + ", ".join(f"{t} {o}→{n}" for t, o, n in changes), "strategy_changes", force=True)
+      return msg
     except Exception as e:
       inc_error()
       logger.exception("on_select_strategy: %s", e)
@@ -501,6 +507,8 @@ async def main() -> None:
     rl_train_start_done = False
     strategy_selection_start_done = False
     auto_strategy_selection_on_start = getattr(cfg.portfolio, "auto_strategy_selection_on_start", False)
+    strategy_selection_interval_days = getattr(cfg.portfolio, "strategy_selection_interval_days", 0) or 0
+    strategy_selection_state_file = base_dir / "data" / "strategy_selection_state.json"
     last_day_reset_date: date | None = None
     last_weekly_report_date: date | None = None
     last_alert_drawdown_date: date | None = None
@@ -550,7 +558,7 @@ async def main() -> None:
           from tinkoff_bot.self_learn import run_strategy_selection
           loop = asyncio.get_event_loop()
           sel_days = getattr(cfg.portfolio, "strategy_selection_days", 90) or 90
-          res = await loop.run_in_executor(
+          msg, changes = await loop.run_in_executor(
             None,
             lambda: run_strategy_selection(
               broker, cfg.instruments, days=sel_days,
@@ -561,11 +569,52 @@ async def main() -> None:
               risk_penalty=getattr(cfg.portfolio, "self_learn_risk_penalty", 0.5) or 0.5,
               allow_deepseek=getattr(cfg.portfolio, "use_deepseek_advisor", False),
               deepseek_model=getattr(cfg.portfolio, "deepseek_model", "deepseek-chat"),
+              strategy_change_min_delta=getattr(cfg.portfolio, "strategy_change_min_delta", 0.05) or 0,
+              strategy_diversity_max_share=getattr(cfg.portfolio, "strategy_diversity_max_share", 0) or 0,
             ),
           )
-          await send_alert(tg, "📊 Выбор стратегий при старте:\n" + res, "strategy_selection", force=True)
+          await send_alert(tg, "📊 Выбор стратегий при старте:\n" + msg, "strategy_selection", force=True)
+          if changes:
+            await send_alert(tg, "📊 Смена стратегий: " + ", ".join(f"{t} {o}→{n}" for t, o, n in changes), "strategy_changes", force=True)
         except Exception as e:
           logger.exception("Strategy selection on start: %s", e)
+      if strategy_selection_interval_days > 0:
+        last_sel_date: date | None = None
+        if strategy_selection_state_file.exists():
+          try:
+            data = json.loads(strategy_selection_state_file.read_text(encoding="utf-8"))
+            s = data.get("last_date", "")[:10]
+            if s:
+              last_sel_date = datetime.strptime(s, "%Y-%m-%d").date()
+          except Exception:
+            pass
+        if last_sel_date is None or (today - last_sel_date).days >= strategy_selection_interval_days:
+          try:
+            from tinkoff_bot.self_learn import run_strategy_selection
+            loop = asyncio.get_event_loop()
+            sel_days = getattr(cfg.portfolio, "strategy_selection_days", 90) or 90
+            msg, changes = await loop.run_in_executor(
+              None,
+              lambda: run_strategy_selection(
+                broker, cfg.instruments, days=sel_days,
+                commission_rate=getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003,
+                train_ratio=getattr(cfg.portfolio, "self_learn_train_ratio", 0.7) or 0.7,
+                use_sharpe=getattr(cfg.portfolio, "self_learn_use_sharpe", True),
+                min_trades=getattr(cfg.portfolio, "self_learn_min_trades", 5) or 5,
+                risk_penalty=getattr(cfg.portfolio, "self_learn_risk_penalty", 0.5) or 0.5,
+                allow_deepseek=getattr(cfg.portfolio, "use_deepseek_advisor", False),
+                deepseek_model=getattr(cfg.portfolio, "deepseek_model", "deepseek-chat"),
+                strategy_change_min_delta=getattr(cfg.portfolio, "strategy_change_min_delta", 0.05) or 0,
+                strategy_diversity_max_share=getattr(cfg.portfolio, "strategy_diversity_max_share", 0) or 0,
+              ),
+            )
+            strategy_selection_state_file.parent.mkdir(parents=True, exist_ok=True)
+            strategy_selection_state_file.write_text(json.dumps({"last_date": today.isoformat()}, ensure_ascii=False), encoding="utf-8")
+            await send_alert(tg, "📊 Периодический выбор стратегий:\n" + msg, "strategy_selection", force=True)
+            if changes:
+              await send_alert(tg, "📊 Смена стратегий: " + ", ".join(f"{t} {o}→{n}" for t, o, n in changes), "strategy_changes", force=True)
+          except Exception as e:
+            logger.exception("Periodic strategy selection: %s", e)
       if alert_live_ping_hours > 0:
         if last_live_ping is None:
           last_live_ping = now
