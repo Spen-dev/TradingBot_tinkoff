@@ -248,7 +248,13 @@ class TelegramController:
     def _dashboard_message(self) -> tuple[str, types.InlineKeyboardMarkup | None, bool]:
       """Возвращает (текст, reply_markup или None, use_html)."""
       if not self._dashboard_url:
-        return "Укажите web.dashboard_url в config.yaml (например http://IP:8000/dashboard).", None, False
+        return (
+          "Ссылка на дашборд не настроена.\n"
+          "На сервере в config.yaml в секции web: добавьте:\n"
+          "  dashboard_url: \"http://IP:8000/dashboard\"\n"
+          "Или в .env задайте: DASHBOARD_URL=http://IP:8000/dashboard\n"
+          "После этого перезапустите бота."
+        ), None, False
       # Ссылка отдельной строкой — Telegram подчёркивает и делает кликабельной; плюс кнопка под сообщением
       text = (
         f"{self._dashboard_url}\n\n"
@@ -260,13 +266,15 @@ class TelegramController:
     async def cmd_dashboard(msg: types.Message):
       if msg.chat.id != self.admin_chat_id:
         return
+      _log.debug("Запрос дашборда (команда) от chat_id=%s", msg.chat.id)
       text, markup, use_html = self._dashboard_message()
       await msg.answer(text, reply_markup=markup, parse_mode="HTML" if use_html else None)
 
-    @self.dp.message(lambda m: m.text and (m.text.strip() == DASHBOARD_BUTTON_TEXT or "Дашборд" in (m.text or "")))
+    @self.dp.message(lambda m: m.text and ("дашборд" in (m.text or "").lower() or m.text.strip() == DASHBOARD_BUTTON_TEXT))
     async def btn_dashboard(msg: types.Message):
       if msg.chat.id != self.admin_chat_id:
         return
+      _log.debug("Запрос дашборда (кнопка/текст) от chat_id=%s, url задан=%s", msg.chat.id, bool(self._dashboard_url))
       text, markup, use_html = self._dashboard_message()
       await msg.answer(text, reply_markup=markup, parse_mode="HTML" if use_html else None)
 
@@ -424,12 +432,15 @@ class TelegramController:
     """Запуск бота. Завершится, когда будет нажата кнопка СТОП или вызван /stop."""
     _log.info("Telegram polling запущен; ответы только в чате admin_chat_id=%s", self.admin_chat_id)
     if self._dashboard_url:
+      _log.info("Дашборд: ссылка задана, кнопка «Дашборд» будет присылать URL")
       try:
         await self.bot.set_chat_menu_button(
           menu_button=MenuButtonWebApp(text="📈 Дашборд", web_app=WebAppInfo(url=self._dashboard_url)),
         )
       except Exception as e:
         _log.warning("Не удалось установить кнопку меню дашборда: %s (нужен HTTPS для Web App)", e)
+    else:
+      _log.warning("Дашборд: web.dashboard_url не задан — в config.yaml или .env (DASHBOARD_URL) укажите URL")
     poll_task = asyncio.create_task(self.dp.start_polling(self.bot))
     await self._stop_event.wait()
     poll_task.cancel()
