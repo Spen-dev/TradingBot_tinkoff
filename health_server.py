@@ -145,8 +145,6 @@ async def _write_response(writer: asyncio.StreamWriter, status: int, body: bytes
 
 async def _handle_api_status(broker: "TinkoffBroker | None", cfg: "AppConfig | None") -> Dict[str, Any]:
   from .risk import RiskManager
-  from .metrics import get_trades  # type: ignore[import]  # not used, but left as placeholder
-  from .trade_history import get_trades as load_trades
   cash = 0.0
   equity = 0.0
   positions_count = 0
