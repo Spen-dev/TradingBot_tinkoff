@@ -143,12 +143,14 @@ DASHBOARD_HTML = """
 
         const sEl = document.getElementById('status-body');
         const allowed = status.trading_allowed;
-        const riskText = allowed ? 'торговля разрешена' : 'торговля остановлена';
+        const riskHtml = allowed
+          ? '<span class="text-ok">торговля разрешена</span>'
+          : '<span class="text-bad">торговля остановлена</span>';
         const modeLabel = (status.mode === 'real' || status.mode === 'live') ? 'Реал' : 'Песочница';
         const modeValClass = modeLabel === 'Реал' ? 'mode-real-val' : 'mode-sandbox-val';
         const robotStatusHtml = status.robot_running
-          ? 'Статус робота <span class="text-ok">Работает</span>, ' + riskText
-          : 'Статус робота <span class="text-bad">Не работает</span>, ' + riskText;
+          ? 'Статус робота <span class="text-ok">Работает</span>, ' + riskHtml
+          : 'Статус робота <span class="text-bad">Не работает</span>, ' + riskHtml;
         const uptimeStr = formatUptime(status.uptime_seconds || 0);
         sEl.innerHTML = `
           <div class="metric-row">
@@ -190,7 +192,7 @@ DASHBOARD_HTML = """
           tbody.appendChild(tr);
         });
 
-        // Эволюция стоимости портфеля: X — дата, Y — equity. Если истории нет — подставляем две точки (вчера + сейчас)
+        // Эволюция стоимости портфеля: две точки в день — при ребалансе и последнее значение за день
         let pts = equityHist.points || [];
         let usedSynthetic = false;
         if (pts.length === 0 && status.equity != null && status.equity !== undefined) {
@@ -203,8 +205,48 @@ DASHBOARD_HTML = """
           ];
           usedSynthetic = true;
         }
-        const labels = pts.map(p => new Date(p.ts));
-        const data = pts.map(p => p.equity);
+        const rebalanceTimeStr = (status.rebalance_time || '10:00').trim();
+        const [rbH, rbM] = rebalanceTimeStr.split(':').map(s => parseInt(s, 10) || 0);
+        function dayKey(d) {
+          return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        }
+        const byDay = new Map();
+        pts.forEach(p => {
+          const d = new Date(p.ts);
+          const key = dayKey(d);
+          if (!byDay.has(key)) byDay.set(key, []);
+          byDay.get(key).push({ ts: p.ts, equity: p.equity, date: d });
+        });
+        const sortedDays = Array.from(byDay.keys()).sort();
+        const dayPoints = [];
+        sortedDays.forEach(k => {
+          const list = byDay.get(k).sort((a, b) => new Date(a.ts) - new Date(b.ts));
+          const firstDate = list[0].date;
+          const rebalanceTs = new Date(firstDate.getFullYear(), firstDate.getMonth(), firstDate.getDate(), rbH, rbM, 0);
+          let rebalPoint = list.reduce((best, p) => {
+            const dist = Math.abs(new Date(p.ts) - rebalanceTs);
+            return (!best || dist < best.dist) ? { point: p, dist } : best;
+          }, null);
+          if (!rebalPoint) rebalPoint = { point: list[0] };
+          const lastPoint = list[list.length - 1];
+          dayPoints.push(rebalPoint.point);
+          if (rebalPoint.point !== lastPoint) dayPoints.push(lastPoint);
+          else dayPoints.push({ ts: lastPoint.ts, equity: lastPoint.equity });
+        });
+        const now = new Date();
+        const todayKey = dayKey(now);
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayKey = dayKey(yesterday);
+        if (dayPoints.length > 0 && sortedDays[0] === todayKey && !byDay.has(yesterdayKey)) {
+          const firstEquity = dayPoints[0].equity;
+          dayPoints.unshift(
+            { ts: yesterday.toISOString().slice(0,10) + 'T' + String(rbH).padStart(2,'0') + ':' + String(rbM).padStart(2,'0') + ':00.000Z', equity: firstEquity },
+            { ts: yesterday.toISOString(), equity: firstEquity }
+          );
+        }
+        const labels = dayPoints.map(p => new Date(p.ts));
+        const data = dayPoints.map(p => p.equity);
         const subEl = document.getElementById('equity-subtitle');
         if (subEl) subEl.textContent = usedSynthetic
           ? 'Показано текущее значение (история накапливается каждую минуту)'
@@ -231,8 +273,8 @@ DASHBOARD_HTML = """
               scales: {
                 x: {
                   type: 'time',
-                  time: { unit: 'day', displayFormats: { day: 'dd.MM' } },
-                  ticks: { color: '#9ca3af', maxTicksLimit: 10 },
+                  time: { unit: 'day', displayFormats: { day: 'dd.MM', week: 'dd.MM', month: 'MM.yy' } },
+                  ticks: { color: '#9ca3af', maxTicksLimit: 31 },
                   grid: { color: 'rgba(15,23,42,0.7)' },
                 },
                 y: {
@@ -360,6 +402,9 @@ async def _handle_api_status(
     robot_running = is_ready() if callable(is_ready) else True
     started_at = get_started_at() if callable(get_started_at) else None
     uptime_seconds = int((datetime.now() - started_at).total_seconds()) if started_at and robot_running else 0
+    rebalance_time = "10:00"
+    if cfg and getattr(cfg.portfolio, "rebalance_time", None):
+      rebalance_time = str(cfg.portfolio.rebalance_time).strip() or "10:00"
     return {
       "version": version,
       "mode": mode,
@@ -373,6 +418,7 @@ async def _handle_api_status(
       "drawdown_pct": drawdown_pct,
       "trading_allowed": trading_allowed,
       "updated_at": updated_at,
+      "rebalance_time": rebalance_time,
     }
   except Exception as e:
     logger.debug("api_status: fatal error: %s", e)
@@ -389,6 +435,7 @@ async def _handle_api_status(
       "drawdown_pct": 0.0,
       "trading_allowed": False,
       "updated_at": _now_msk_iso(),
+      "rebalance_time": "10:00",
     }
 
 
