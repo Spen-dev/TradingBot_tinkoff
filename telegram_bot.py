@@ -262,21 +262,33 @@ class TelegramController:
       )
       return text, self._dashboard_reply_markup(), False
 
+    async def _send_dashboard(self, msg: types.Message) -> None:
+      """Отправить сообщение со ссылкой на дашборд (с fallback при ошибке)."""
+      text, markup, use_html = self._dashboard_message()
+      try:
+        await msg.answer(text, reply_markup=markup, parse_mode="HTML" if use_html else None)
+      except Exception as e:
+        _log.exception("Ошибка отправки дашборда: %s", e)
+        try:
+          await msg.answer(self._dashboard_url or "Ссылка не настроена (web.dashboard_url или DASHBOARD_URL).")
+        except Exception:
+          pass
+
     @self.dp.message(Command("dashboard"))
     async def cmd_dashboard(msg: types.Message):
       if msg.chat.id != self.admin_chat_id:
+        await msg.answer("Доступ только для администратора.")
         return
-      _log.debug("Запрос дашборда (команда) от chat_id=%s", msg.chat.id)
-      text, markup, use_html = self._dashboard_message()
-      await msg.answer(text, reply_markup=markup, parse_mode="HTML" if use_html else None)
+      _log.info("Запрос дашборда (команда) от chat_id=%s", msg.chat.id)
+      await self._send_dashboard(msg)
 
-    @self.dp.message(lambda m: m.text and ("дашборд" in (m.text or "").lower() or m.text.strip() == DASHBOARD_BUTTON_TEXT))
+    @self.dp.message(lambda m: m.text and ("дашборд" in (m.text or "").lower() or (m.text or "").strip() == DASHBOARD_BUTTON_TEXT))
     async def btn_dashboard(msg: types.Message):
       if msg.chat.id != self.admin_chat_id:
+        await msg.answer("Доступ только для администратора.")
         return
-      _log.debug("Запрос дашборда (кнопка/текст) от chat_id=%s, url задан=%s", msg.chat.id, bool(self._dashboard_url))
-      text, markup, use_html = self._dashboard_message()
-      await msg.answer(text, reply_markup=markup, parse_mode="HTML" if use_html else None)
+      _log.info("Запрос дашборда (кнопка) от chat_id=%s, url задан=%s", msg.chat.id, bool(self._dashboard_url))
+      await self._send_dashboard(msg)
 
     @self.dp.message(Command("rebalance"))
     async def cmd_rebalance(msg: types.Message):
