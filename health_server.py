@@ -123,7 +123,7 @@ DASHBOARD_HTML = """
 
         // График equity
         const pts = equityHist.points || [];
-        const labels = pts.map(p => new Date(p.ts));
+        const labels = pts.map(p => p.ts);
         const data = pts.map(p => p.equity);
         if (!window.equityChart) {
           const ctx = document.getElementById('equity-chart').getContext('2d');
@@ -146,8 +146,6 @@ DASHBOARD_HTML = """
               plugins: { legend: { display: false } },
               scales: {
                 x: {
-                  type: 'time',
-                  time: { unit: 'hour', displayFormats: { hour: 'dd.MM HH:mm' } },
                   ticks: { color: '#a0a7c0', maxTicksLimit: 10 },
                 },
                 y: {
