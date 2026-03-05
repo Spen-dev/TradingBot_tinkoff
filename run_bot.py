@@ -147,6 +147,11 @@ async def main() -> None:
       print(f"Робот запущен. Cash={cash:.2f} Equity={equity:.2f} Positions={npos}")
       nonlocal started
       started = True
+      try:
+        from tinkoff_bot.equity_history import append_equity_point
+        append_equity_point(datetime.now(), equity, cash, npos)
+      except Exception:
+        pass
       await send_alert(tg, f"🟢 Робот запущен. Портфель: {equity:.2f} {cfg.portfolio.base_currency}, позиций: {npos}", "start", force=True)
     except Exception as e:
       inc_error()

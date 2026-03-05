@@ -192,8 +192,17 @@ DASHBOARD_HTML = """
           tbody.appendChild(tr);
         });
 
-        // Эволюция стоимости портфеля: X — дата, Y — equity
-        const pts = equityHist.points || [];
+        // Эволюция стоимости портфеля: X — дата, Y — equity. Если истории нет — одна точка не рисует линию, подставляем две (вчера + сейчас)
+        let pts = equityHist.points || [];
+        if (pts.length === 0 && status.equity != null) {
+          const now = new Date();
+          const yesterday = new Date(now);
+          yesterday.setDate(yesterday.getDate() - 1);
+          pts = [
+            { ts: yesterday.toISOString(), equity: status.equity },
+            { ts: now.toISOString(), equity: status.equity },
+          ];
+        }
         const labels = pts.map(p => new Date(p.ts));
         const data = pts.map(p => p.equity);
         if (!window.equityChart) {
