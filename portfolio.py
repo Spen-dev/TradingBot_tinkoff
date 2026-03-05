@@ -294,6 +294,7 @@ class PortfolioManager:
         to_dt = datetime.now()
         from_dt = to_dt - timedelta(days=history_days)
         history_summary = {}
+        # История по инструментам портфеля
         for ins in instruments_list:
           try:
             df = self.broker.get_historical_candles(ins.figi, from_dt, to_dt)
@@ -321,6 +322,54 @@ class PortfolioManager:
               history_summary[ins.ticker] = "нет данных"
           except Exception:
             history_summary[getattr(ins, "ticker", "")] = "ошибка"
+        # Сводка по рынку РФ (индекс)
+        index_figi = getattr(self.cfg, "market_index_figi", "") or ""
+        if index_figi:
+          label = "IMOEX" if index_figi == "BBG004730JJ5" else index_figi
+          key = f"MARKET_{label}"
+          try:
+            df_idx = self.broker.get_historical_candles(index_figi, from_dt, to_dt)
+            if df_idx is not None and len(df_idx) >= 2 and "close" in df_idx.columns:
+              close = df_idx["close"]
+              r5 = (float(close.iloc[-1]) / float(close.iloc[-min(5, len(close))]) - 1) * 100 if len(close) >= 5 else 0
+              r10 = (float(close.iloc[-1]) / float(close.iloc[0]) - 1) * 100
+              high = df_idx["high"].values if "high" in df_idx.columns else close.values
+              low = df_idx["low"].values if "low" in df_idx.columns else close.values
+              peak = float(close.iloc[0])
+              dd = 0.0
+              for i in range(len(close)):
+                p = float(close.iloc[i])
+                peak = max(peak, p)
+                if peak > 0:
+                  dd = max(dd, (peak - p) / peak * 100)
+              atr_pct = 0.0
+              if len(close) >= 14 and "high" in df_idx.columns and "low" in df_idx.columns:
+                prev = close.shift(1).bfill().values
+                tr = np.maximum(high - low, np.maximum(np.abs(high - prev), np.abs(low - prev)))
+                atr = float(np.mean(tr[-14:])) if len(tr) >= 14 else 0
+                atr_pct = (atr / float(close.iloc[-1]) * 100) if close.iloc[-1] else 0
+              # Режим рынка по индексу (trend/range/weak_trend)
+              regime_str = ""
+              try:
+                from .market_regime import get_regime_by_index
+                adx_period = getattr(self.cfg, "adx_period", 14)
+                adx_threshold = getattr(self.cfg, "adx_threshold", 25.0)
+                adx_threshold_low = getattr(self.cfg, "adx_threshold_low", 0.0) or 0.0
+                adx_threshold_low = (adx_threshold_low if adx_threshold_low > 0 else None)
+                regime_str = get_regime_by_index(
+                  self.broker, index_figi, days=30, adx_period=adx_period,
+                  adx_threshold=adx_threshold, adx_threshold_low=adx_threshold_low,
+                )
+              except Exception:
+                regime_str = ""
+              summary = f"return_5d={r5:.1f}% return_10d={r10:.1f}% atr_pct={atr_pct:.1f}% dd_10d={dd:.1f}%"
+              if regime_str:
+                summary += f" regime={regime_str}"
+              history_summary[key] = summary
+            else:
+              history_summary[key] = "нет данных по индексу"
+          except Exception:
+            history_summary[key] = "ошибка при получении индекса"
       try:
         from .deepseek_advisor import get_recommendations as get_deepseek_recommendations
         recs = get_deepseek_recommendations(
