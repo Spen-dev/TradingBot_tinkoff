@@ -175,6 +175,7 @@ DASHBOARD_HTML = """
           </div>
           <div class="small" style="margin-top:6px;">${riskText}</div>
           <div class="small" style="margin-top:6px;">След. ребаланс: ${status.next_rebalance || '-'}, дайджест: ${status.next_digest || '-'}</div>
+          <div class="small" style="margin-top:4px; color:#6b7280;">Обновлено: ${status.updated_at ? new Date(status.updated_at).toLocaleTimeString('ru-RU') : '—'}</div>
         `;
 
         const tbody = document.querySelector('#portfolio-table tbody');
@@ -192,9 +193,10 @@ DASHBOARD_HTML = """
           tbody.appendChild(tr);
         });
 
-        // Эволюция стоимости портфеля: X — дата, Y — equity. Если истории нет — одна точка не рисует линию, подставляем две (вчера + сейчас)
+        // Эволюция стоимости портфеля: X — дата, Y — equity. Если истории нет — подставляем две точки (вчера + сейчас)
         let pts = equityHist.points || [];
-        if (pts.length === 0 && status.equity != null) {
+        let usedSynthetic = false;
+        if (pts.length === 0 && status.equity != null && status.equity !== undefined) {
           const now = new Date();
           const yesterday = new Date(now);
           yesterday.setDate(yesterday.getDate() - 1);
@@ -202,9 +204,14 @@ DASHBOARD_HTML = """
             { ts: yesterday.toISOString(), equity: status.equity },
             { ts: now.toISOString(), equity: status.equity },
           ];
+          usedSynthetic = true;
         }
         const labels = pts.map(p => new Date(p.ts));
         const data = pts.map(p => p.equity);
+        const subEl = document.getElementById('equity-subtitle');
+        if (subEl) subEl.textContent = usedSynthetic
+          ? 'Показано текущее значение (история накапливается каждую минуту)'
+          : 'Equity по дням';
         if (!window.equityChart) {
           const ctx = document.getElementById('equity-chart').getContext('2d');
           window.equityChart = new Chart(ctx, {
@@ -257,13 +264,24 @@ DASHBOARD_HTML = """
 """.strip()
 
 
-async def _write_response(writer: asyncio.StreamWriter, status: int, body: bytes, content_type: str = "text/plain; charset=utf-8") -> None:
-  writer.write(
-    f"HTTP/1.0 {status} {'OK' if status == 200 else 'Error'}\r\n"
-    f"Content-Type: {content_type}\r\n"
-    "Connection: close\r\n"
-    f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8")
-  )
+async def _write_response(
+  writer: asyncio.StreamWriter,
+  status: int,
+  body: bytes,
+  content_type: str = "text/plain; charset=utf-8",
+  extra_headers: Dict[str, str] | None = None,
+) -> None:
+  headers = [
+    f"HTTP/1.0 {status} {'OK' if status == 200 else 'Error'}\r\n",
+    f"Content-Type: {content_type}\r\n",
+    "Connection: close\r\n",
+    f"Content-Length: {len(body)}\r\n",
+  ]
+  if extra_headers:
+    for k, v in extra_headers.items():
+      headers.append(f"{k}: {v}\r\n")
+  headers.append("\r\n")
+  writer.write("".join(headers).encode("utf-8"))
   writer.write(body)
   await writer.drain()
   try:
@@ -271,6 +289,21 @@ async def _write_response(writer: asyncio.StreamWriter, status: int, body: bytes
     await writer.wait_closed()
   except Exception:
     pass
+
+
+def _load_status_snapshot() -> Dict[str, Any] | None:
+  """Снимок статуса из основного цикла (актуальные PnL и просадка)."""
+  try:
+    from pathlib import Path
+    snap_file = Path(__file__).resolve().parent / "data" / "status_snapshot.json"
+    if not snap_file.exists():
+      return None
+    data = json.loads(snap_file.read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+      return data
+  except Exception:
+    pass
+  return None
 
 
 async def _handle_api_status(broker: "TinkoffBroker | None", cfg: "AppConfig | None") -> Dict[str, Any]:
@@ -283,7 +316,17 @@ async def _handle_api_status(broker: "TinkoffBroker | None", cfg: "AppConfig | N
     daily_pnl = 0.0
     drawdown_pct = 0.0
     trading_allowed = True
-    if broker and cfg:
+    updated_at = datetime.now().isoformat()
+    snap = _load_status_snapshot()
+    if snap:
+      equity = float(snap.get("equity", 0))
+      cash = float(snap.get("cash", 0))
+      positions_count = int(snap.get("positions_count", 0))
+      daily_pnl = float(snap.get("daily_pnl", 0))
+      drawdown_pct = float(snap.get("drawdown_pct", 0))
+      trading_allowed = bool(snap.get("trading_allowed", True))
+      updated_at = str(snap.get("updated_at", updated_at))
+    elif broker and cfg:
       try:
         cash = broker.get_cash_balance(cfg.portfolio.base_currency)
         positions = broker.get_portfolio()
@@ -335,6 +378,7 @@ async def _handle_api_status(broker: "TinkoffBroker | None", cfg: "AppConfig | N
       "trading_allowed": trading_allowed,
       "next_rebalance": next_reb,
       "next_digest": next_dig,
+      "updated_at": updated_at,
     }
   except Exception as e:
     logger.debug("api_status: fatal error: %s", e)
@@ -350,6 +394,7 @@ async def _handle_api_status(broker: "TinkoffBroker | None", cfg: "AppConfig | N
       "trading_allowed": False,
       "next_rebalance": "",
       "next_digest": "",
+      "updated_at": datetime.now().isoformat(),
     }
 
 
@@ -421,12 +466,16 @@ async def handle_health(
         await _write_response(writer, 500, b"")
       return
     if "GET /dashboard" in line or "GET / " in line and "/api/" not in line and "/health" not in line:
-      await _write_response(writer, 200, DASHBOARD_HTML.encode("utf-8"), "text/html; charset=utf-8")
+      await _write_response(
+        writer, 200, DASHBOARD_HTML.encode("utf-8"),
+        "text/html; charset=utf-8",
+        extra_headers={"Cache-Control": "no-store, no-cache"},
+      )
       return
     if "GET /api/status" in line:
       body_obj = await _handle_api_status(broker, cfg)
       body = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
-      await _write_response(writer, 200, body, "application/json; charset=utf-8")
+      await _write_response(writer, 200, body, "application/json; charset=utf-8", extra_headers={"Cache-Control": "no-store, no-cache"})
       return
     if "GET /api/portfolio" in line:
       try:
@@ -435,7 +484,7 @@ async def handle_health(
         logger.debug("api/portfolio error: %s", e)
         body_obj = {"instruments": []}
       body = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
-      await _write_response(writer, 200, body, "application/json; charset=utf-8")
+      await _write_response(writer, 200, body, "application/json; charset=utf-8", extra_headers={"Cache-Control": "no-store, no-cache"})
       return
     if "GET /api/equity" in line:
       try:
@@ -444,7 +493,7 @@ async def handle_health(
         logger.debug("api/equity error: %s", e)
         body_obj = {"points": []}
       body = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
-      await _write_response(writer, 200, body, "application/json; charset=utf-8")
+      await _write_response(writer, 200, body, "application/json; charset=utf-8", extra_headers={"Cache-Control": "no-store, no-cache"})
       return
     if "GET /health" in line:
       broker_ok = False

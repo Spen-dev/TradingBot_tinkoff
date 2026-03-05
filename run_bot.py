@@ -90,6 +90,17 @@ async def main() -> None:
   awaiting_real_confirm = False
   awaiting_stop_confirm = False
 
+  def _now_for_window():
+    """Текущее время в зоне торгового окна (rebalance_time и окно — в этой зоне)."""
+    tz_name = (getattr(cfg.portfolio, "trading_timezone", None) or "").strip()
+    if not tz_name:
+      return datetime.now()
+    try:
+      from zoneinfo import ZoneInfo
+      return datetime.now(ZoneInfo(tz_name))
+    except Exception:
+      return datetime.now()
+
   def compute_equity() -> tuple[float, float, int]:
     positions = broker.get_portfolio()
     cash = broker.get_cash_balance(currency=cfg.portfolio.base_currency)
@@ -303,7 +314,7 @@ async def main() -> None:
           msg += " Сброс: /pause 0"
         await send_alert(tg, msg, "trading_blocked")
         return f"Торговля запрещена: {reason or 'лимит'}"
-      now = datetime.now()
+      now_window = _now_for_window()
       rt = getattr(cfg.portfolio, "rebalance_time", "10:00") or "10:00"
       try:
         rh, rm = map(int, rt.split(":"))
@@ -312,7 +323,7 @@ async def main() -> None:
       w_start = getattr(cfg.portfolio, "rebalance_window_start_minutes", 0) or 0
       w_end = getattr(cfg.portfolio, "rebalance_window_end_minutes", 24 * 60) or (24 * 60)
       rt_mins = rh * 60 + rm
-      now_mins = now.hour * 60 + now.minute
+      now_mins = now_window.hour * 60 + now_window.minute
       in_window = (w_start == 0 and w_end >= 24 * 60) or (rt_mins + w_start <= now_mins <= w_end)
       prefix = ""
       if not trading_enabled:
@@ -550,7 +561,8 @@ async def main() -> None:
     panic_today: bool = False
 
     def _in_rebalance_window() -> bool:
-      now_mins = now.hour * 60 + now.minute
+      wnow = _now_for_window()
+      now_mins = wnow.hour * 60 + wnow.minute
       if window_start == 0 and window_end >= 24 * 60:
         return True
       return (now_mins >= rt_mins + window_start) and (now_mins <= window_end)
@@ -560,11 +572,22 @@ async def main() -> None:
       now = datetime.now()
       if not started:
         continue
-      # Логирование equity для дашборда
+      # Логирование equity и снимок статуса для дашборда (актуальные PnL и просадка)
       try:
         from tinkoff_bot.equity_history import append_equity_point
         eq, cs, npos = compute_equity()
         append_equity_point(now, eq, cs, npos)
+        st = risk.update_equity(eq, day_start_equity or eq)
+        dd = (st.max_equity_seen - st.equity) / max(st.max_equity_seen, 1e-9) if st.max_equity_seen else 0.0
+        snapshot = {
+          "equity": eq, "cash": cs, "positions_count": npos,
+          "daily_pnl": st.daily_pnl, "drawdown_pct": round(dd * 100, 2),
+          "trading_allowed": risk.is_trading_allowed(st),
+          "updated_at": now.isoformat(),
+        }
+        _snap_dir = Path(__file__).resolve().parent / "data"
+        _snap_dir.mkdir(parents=True, exist_ok=True)
+        (_snap_dir / "status_snapshot.json").write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
       except Exception:
         pass
       if auto_strategy_selection_on_start and not strategy_selection_start_done:

@@ -98,6 +98,7 @@ class PortfolioConfig:
   self_learn_weight_cap: float = 0.4
   rebalance_window_start_minutes: int = 30
   rebalance_window_end_minutes: int = 1090
+  trading_timezone: str = ""  # например Europe/Moscow; пусто = локальное время сервера
   volume_filter_min_ratio: float = 0.0
   atr_percentile_days: int = 90
   use_market_regime: bool = True
@@ -212,6 +213,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     self_learn_weight_cap=p_raw.get("self_learn_weight_cap", 0.4),
     rebalance_window_start_minutes=p_raw.get("rebalance_window_start_minutes", 30),
     rebalance_window_end_minutes=p_raw.get("rebalance_window_end_minutes", 1090),
+    trading_timezone=p_raw.get("trading_timezone", ""),
     volume_filter_min_ratio=p_raw.get("volume_filter_min_ratio", 0.0),
     atr_percentile_days=p_raw.get("atr_percentile_days", 90),
     use_market_regime=p_raw.get("use_market_regime", True),
