@@ -119,6 +119,18 @@ DASHBOARD_HTML = """
       return (v || 0).toFixed(2) + '%';
     }
 
+    function formatUptime(sec) {
+      if (!sec || sec < 0) return '0 мин';
+      const d = Math.floor(sec / 86400);
+      const h = Math.floor((sec % 86400) / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const parts = [];
+      if (d > 0) parts.push(d + ' дн.');
+      if (h > 0 || d > 0) parts.push(h + ' ч');
+      parts.push(m + ' мин');
+      return parts.join(' ');
+    }
+
     async function refresh() {
       try {
         const [status, portfolio, equityHist] = await Promise.all([
@@ -131,23 +143,25 @@ DASHBOARD_HTML = """
         const allowed = status.trading_allowed;
         const riskText = allowed ? '<span class="pill pill-ok">торговля разрешена</span>'
                                  : '<span class="pill pill-bad">торговля остановлена</span>';
+        const robotStatus = status.robot_running ? 'Работает' : 'Не работает';
+        const uptimeStr = formatUptime(status.uptime_seconds || 0);
         sEl.innerHTML = `
           <div class="metric-row">
             <div><span class="metric-label">Версия</span> <span class="metric-value">${status.version || '?'}</span></div>
-            <div><span class="metric-label">Режим</span> <span class="metric-value">${status.mode}</span></div>
+            <div><span class="metric-label">Статус робота</span> <span class="metric-value">${robotStatus}</span></div>
             <div><span class="metric-label">Песочница</span> <span class="metric-value">${status.sandbox ? 'Да' : 'Нет'}</span></div>
           </div>
           <div class="metric-row" style="margin-top:6px;">
-            <div><span class="metric-label">Equity</span> <span class="metric-value">${fmtMoney(status.equity)} RUB</span></div>
-            <div><span class="metric-label">Кэш</span> <span class="metric-value">${fmtMoney(status.cash)} RUB</span></div>
+            <div><span class="metric-label">Эквити</span> <span class="metric-value">${fmtMoney(status.equity)} руб</span></div>
+            <div><span class="metric-label">Свободные средства</span> <span class="metric-value">${fmtMoney(status.cash)} руб</span></div>
             <div><span class="metric-label">Позиции</span> <span class="metric-value">${status.positions_count}</span></div>
           </div>
           <div class="metric-row" style="margin-top:6px;">
-            <div><span class="metric-label">Дневной результат</span> <span class="metric-value">${fmtMoney(status.daily_pnl)} RUB</span></div>
+            <div><span class="metric-label">Дневной результат</span> <span class="metric-value">${fmtMoney(status.daily_pnl)} руб</span></div>
             <div><span class="metric-label">Просадка</span> <span class="metric-value">${fmtPct(status.drawdown_pct)}</span></div>
           </div>
           <div class="small" style="margin-top:6px;">${riskText}</div>
-          <div class="small" style="margin-top:6px;">След. ребаланс: ${status.next_rebalance || '-'}, дайджест: ${status.next_digest || '-'}</div>
+          <div class="small" style="margin-top:6px;">Время работы: ${uptimeStr}</div>
           <div class="small" style="margin-top:4px; color:#6b7280;">Обновлено (МСК): ${status.updated_at ? new Date(status.updated_at).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow' }) : '—'}</div>
         `;
 
@@ -287,7 +301,12 @@ def _load_status_snapshot() -> Dict[str, Any] | None:
   return None
 
 
-async def _handle_api_status(broker: "TinkoffBroker | None", cfg: "AppConfig | None") -> Dict[str, Any]:
+async def _handle_api_status(
+  broker: "TinkoffBroker | None",
+  cfg: "AppConfig | None",
+  is_ready: Callable[[], bool] = lambda: True,
+  get_started_at: Callable[[], "datetime | None"] = lambda: None,
+) -> Dict[str, Any]:
   """Безопасный статус для дашборда: при любой ошибке возвращает заглушку, а не 500."""
   try:
     from .risk import RiskManager
@@ -318,25 +337,6 @@ async def _handle_api_status(broker: "TinkoffBroker | None", cfg: "AppConfig | N
         trading_allowed = cfg.portfolio.trading_enabled and rm.is_trading_allowed(state)
       except Exception as e:
         logger.debug("api_status: broker/risk error: %s", e)
-    next_reb = ""
-    next_dig = ""
-    try:
-      now = datetime.now()
-      rt = getattr(cfg.portfolio, "rebalance_time", "10:00") if cfg else "10:00"
-      dh = getattr(cfg.portfolio, "daily_digest_time", "18:00") if cfg else "18:00"
-      rh, rm = map(int, str(rt).split(":"))
-      d_h, d_m = map(int, str(dh).split(":"))
-      from datetime import timedelta
-      nr = now.replace(hour=rh, minute=rm, second=0, microsecond=0)
-      if nr <= now:
-        nr += timedelta(days=1)
-      nd = now.replace(hour=d_h, minute=d_m, second=0, microsecond=0)
-      if nd <= now:
-        nd += timedelta(days=1)
-      next_reb = nr.strftime("%H:%M")
-      next_dig = nd.strftime("%H:%M")
-    except Exception as e:
-      logger.debug("api_status: schedule error: %s", e)
     mode = "sandbox"
     sandbox = True
     if cfg:
@@ -347,18 +347,21 @@ async def _handle_api_status(broker: "TinkoffBroker | None", cfg: "AppConfig | N
       version = metadata.version("tinkoff_bot")
     except Exception:
       version = "0.1.0"
+    robot_running = is_ready() if callable(is_ready) else True
+    started_at = get_started_at() if callable(get_started_at) else None
+    uptime_seconds = int((datetime.now() - started_at).total_seconds()) if started_at and robot_running else 0
     return {
       "version": version,
       "mode": mode,
       "sandbox": sandbox,
+      "robot_running": robot_running,
+      "uptime_seconds": uptime_seconds,
       "equity": equity,
       "cash": cash,
       "positions_count": positions_count,
       "daily_pnl": daily_pnl,
       "drawdown_pct": drawdown_pct,
       "trading_allowed": trading_allowed,
-      "next_rebalance": next_reb,
-      "next_digest": next_dig,
       "updated_at": updated_at,
     }
   except Exception as e:
@@ -367,14 +370,14 @@ async def _handle_api_status(broker: "TinkoffBroker | None", cfg: "AppConfig | N
       "version": "0.1.0",
       "mode": "sandbox",
       "sandbox": True,
+      "robot_running": False,
+      "uptime_seconds": 0,
       "equity": 0.0,
       "cash": 0.0,
       "positions_count": 0,
       "daily_pnl": 0.0,
       "drawdown_pct": 0.0,
       "trading_allowed": False,
-      "next_rebalance": "",
-      "next_digest": "",
       "updated_at": _now_msk_iso(),
     }
 
@@ -429,6 +432,7 @@ async def handle_health(
   broker: "TinkoffBroker | None",
   cfg: "AppConfig | None",
   is_ready: Callable[[], bool],
+  get_started_at: Callable[[], "datetime | None"] = lambda: None,
 ) -> None:
   """Обработчик запросов: GET /health или GET / -> JSON; GET /metrics -> Prometheus."""
   try:
@@ -454,7 +458,7 @@ async def handle_health(
       )
       return
     if "GET /api/status" in line:
-      body_obj = await _handle_api_status(broker, cfg)
+      body_obj = await _handle_api_status(broker, cfg, is_ready, get_started_at)
       body = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
       await _write_response(writer, 200, body, "application/json; charset=utf-8", extra_headers={"Cache-Control": "no-store, no-cache"})
       return
@@ -506,10 +510,11 @@ async def run_health_server(
   broker: "TinkoffBroker | None",
   cfg: "AppConfig | None",
   is_ready: Callable[[], bool] = lambda: True,
+  get_started_at: Callable[[], "datetime | None"] = lambda: None,
 ) -> asyncio.Server:
   """Запустить TCP-сервер для /health."""
   server = await asyncio.start_server(
-    lambda r, w: handle_health(r, w, broker, cfg, is_ready),
+    lambda r, w: handle_health(r, w, broker, cfg, is_ready, get_started_at),
     host=host,
     port=port,
   )
