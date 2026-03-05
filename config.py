@@ -266,7 +266,10 @@ def load_config(path: str = "config.yaml") -> AppConfig:
   risk_raw.setdefault("take_profit_pct", 0.03)
   risk_raw.setdefault("trailing_take_profit_pct", 0.02)
   risk = RiskConfig(**risk_raw)
-  web = WebConfig(**{**{"host": "0.0.0.0", "port": 8000, "dashboard_url": ""}, **raw.get("web", {})})
+  web_raw = {**{"host": "0.0.0.0", "port": 8000, "dashboard_url": ""}, **raw.get("web", {})}
+  if os.getenv("DASHBOARD_URL"):
+    web_raw["dashboard_url"] = os.getenv("DASHBOARD_URL", "").strip()
+  web = WebConfig(**web_raw)
 
   instruments = []
   for i in raw["instruments"]:
