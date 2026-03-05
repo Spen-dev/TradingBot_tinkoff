@@ -18,12 +18,15 @@ PAUSE_1H_TEXT = "⏸ Пауза 1 ч"
 PAUSE_24H_TEXT = "⏸ Пауза 24 ч"
 
 
+DASHBOARD_BUTTON_TEXT = "📈 Дашборд"
+
+
 def get_main_keyboard() -> types.ReplyKeyboardMarkup:
   return types.ReplyKeyboardMarkup(
     keyboard=[
       [types.KeyboardButton(text=START_BUTTON_TEXT)],
       [types.KeyboardButton(text="📊 Статус"), types.KeyboardButton(text=POSITIONS_BUTTON_TEXT)],
-      [types.KeyboardButton(text=PORTFOLIO_BUTTON_TEXT)],
+      [types.KeyboardButton(text=PORTFOLIO_BUTTON_TEXT), types.KeyboardButton(text=DASHBOARD_BUTTON_TEXT)],
       [types.KeyboardButton(text=STOP_BUTTON_TEXT)],
     ],
     resize_keyboard=True,
@@ -54,6 +57,7 @@ class TelegramController:
     self._get_mode: Callable[[], str] | None = None
     self._on_stop_request: Callable[[], Awaitable[str | None]] | None = None
     self._on_last_errors: Callable[[], Awaitable[str]] | None = None
+    self._dashboard_url: str = ""
 
     self._register_handlers()
 
@@ -75,7 +79,9 @@ class TelegramController:
     get_mode: Callable[[], str] | None = None,
     on_stop_request: Callable[[], Awaitable[str | None]] | None = None,
     on_last_errors: Callable[[], Awaitable[str]] | None = None,
+    dashboard_url: str = "",
   ) -> None:
+    self._dashboard_url = dashboard_url or ""
     self._on_start = on_start
     self._on_stop = on_stop
     self._on_stop_request = on_stop_request
@@ -105,6 +111,7 @@ class TelegramController:
       "/pause [часы] — пауза торговли на N часов (по умолчанию 24)\n"
       "/unpause <тикер> — снять паузу по инструменту, например /unpause VTBR\n"
       "/last_errors — последние строки из лога (ошибки)\n"
+      "/dashboard — ссылка на веб-дашборд\n"
       "/help — этот список команд\n\n"
       "Кнопки:\n"
       "🟢 Старт — запуск робота, то же что /start\n"
@@ -112,6 +119,7 @@ class TelegramController:
       "📋 Позиции — открытые позиции (тикер, количество, сумма)\n"
       "📂 Портфель — целевые веса и текущие веса\n"
       "⏸ Пауза 1 ч / 24 ч — быстрая пауза торговли\n"
+      "📈 Дашборд — открыть веб-дашборд в браузере\n"
       "🛑 СТОП — приостановка торговли (процесс не завершается)\n\n"
       "Полный выход из бота — только через Ctrl+C в терминале."
     )
@@ -228,6 +236,31 @@ class TelegramController:
       else:
         text = "Портфель недоступен"
       await self.answer_chunked(msg, text)
+
+    def _dashboard_reply_markup(self):
+      if not self._dashboard_url:
+        return None
+      return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="Открыть дашборд", url=self._dashboard_url)],
+      ])
+
+    @self.dp.message(Command("dashboard"))
+    async def cmd_dashboard(msg: types.Message):
+      if msg.chat.id != self.admin_chat_id:
+        return
+      if self._dashboard_url:
+        await msg.answer("Откройте дашборд в браузере:", reply_markup=self._dashboard_reply_markup())
+      else:
+        await msg.answer("Укажите web.dashboard_url в config.yaml (например http://IP:8000/dashboard).")
+
+    @self.dp.message(lambda m: m.text and m.text.strip() == DASHBOARD_BUTTON_TEXT)
+    async def btn_dashboard(msg: types.Message):
+      if msg.chat.id != self.admin_chat_id:
+        return
+      if self._dashboard_url:
+        await msg.answer("Откройте дашборд в браузере:", reply_markup=self._dashboard_reply_markup())
+      else:
+        await msg.answer("Укажите web.dashboard_url в config.yaml (например http://IP:8000/dashboard).")
 
     @self.dp.message(Command("rebalance"))
     async def cmd_rebalance(msg: types.Message):

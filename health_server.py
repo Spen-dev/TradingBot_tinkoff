@@ -30,10 +30,6 @@ DASHBOARD_HTML = """
     .pill-switch { display: inline-flex; padding: 2px; border-radius: 999px; background: #111827; box-shadow: 0 0 0 1px rgba(255,255,255,0.06); }
     .pill-option { border: none; background: transparent; color: #a0a7c0; font-size: 11px; padding: 4px 10px; border-radius: 999px; cursor: pointer; }
     .pill-option-active { background: linear-gradient(90deg, #f97316, #facc15); color: #111827; font-weight: 600; }
-    .tabs { display: flex; gap: 24px; border-bottom: 1px solid rgba(148,163,184,0.3); margin-bottom: 12px; }
-    .tab { padding: 8px 0; font-size: 13px; color: #94a3b8; border: none; background: none; cursor: pointer; position: relative; }
-    .tab-active { color: #f9fafb; font-weight: 600; }
-    .tab-active::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: linear-gradient(90deg, #22c55e, #3b82f6); border-radius: 999px; }
     .layout { display: flex; gap: 16px; margin-top: 12px; }
     .layout-left { flex: 0 0 320px; }
     .layout-right { flex: 1; display: flex; flex-direction: column; gap: 16px; }
@@ -54,8 +50,6 @@ DASHBOARD_HTML = """
     .pill-bad { background: rgba(248,113,113,0.12); color: #fb7185; }
     .pill-warn { background: rgba(250,204,21,0.14); color: #facc15; }
     .small { font-size: 12px; color: #9ca3af; }
-    .tab-content { display: none; }
-    .tab-content-active { display: block; }
     .chart-wrapper { height: 260px; }
   </style>
 </head>
@@ -74,11 +68,6 @@ DASHBOARD_HTML = """
     </div>
   </div>
 
-  <div class="tabs">
-    <button class="tab tab-active" data-tab="evolution" type="button">Эволюция портфеля</button>
-    <button class="tab" data-tab="analysis" type="button">Анализ портфеля</button>
-  </div>
-
   <div class="layout">
     <div class="layout-left">
       <div class="card" id="status-card">
@@ -87,32 +76,28 @@ DASHBOARD_HTML = """
       </div>
     </div>
     <div class="layout-right">
-      <div id="tab-evolution" class="tab-content tab-content-active">
-        <div class="card">
-          <h2>Общая стоимость портфеля</h2>
-          <div class="small" id="equity-subtitle">Equity по дням</div>
-          <div class="chart-wrapper">
-            <canvas id="equity-chart"></canvas>
-          </div>
+      <div class="card">
+        <h2>Общая стоимость портфеля</h2>
+        <div class="small" id="equity-subtitle">Equity по дням</div>
+        <div class="chart-wrapper">
+          <canvas id="equity-chart"></canvas>
         </div>
       </div>
-      <div id="tab-analysis" class="tab-content">
-        <div class="card">
-          <h2>Анализ портфеля</h2>
-          <table id="portfolio-table">
-            <thead>
-              <tr>
-                <th>Тикер</th>
-                <th>Кол-во</th>
-                <th>Цена</th>
-                <th>Сумма</th>
-                <th>Целевой вес</th>
-                <th>Стратегия</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
+      <div class="card">
+        <h2>Анализ портфеля</h2>
+        <table id="portfolio-table">
+          <thead>
+            <tr>
+              <th>Тикер</th>
+              <th>Кол-во</th>
+              <th>Цена</th>
+              <th>Сумма</th>
+              <th>Целевой вес</th>
+              <th>Стратегия</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -132,18 +117,6 @@ DASHBOARD_HTML = """
 
     function fmtPct(v) {
       return (v || 0).toFixed(2) + '%';
-    }
-
-    function initTabs() {
-      const tabs = document.querySelectorAll('.tab');
-      const contents = document.querySelectorAll('.tab-content');
-      tabs.forEach(btn => {
-        btn.addEventListener('click', () => {
-          const tab = btn.dataset.tab;
-          tabs.forEach(t => t.classList.toggle('tab-active', t === btn));
-          contents.forEach(c => c.classList.toggle('tab-content-active', c.id === 'tab-' + tab));
-        });
-      });
     }
 
     async function refresh() {
@@ -255,7 +228,6 @@ DASHBOARD_HTML = """
       }
     }
 
-    initTabs();
     refresh();
     setInterval(refresh, 5000);
   </script>

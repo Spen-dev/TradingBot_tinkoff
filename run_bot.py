@@ -494,6 +494,7 @@ async def main() -> None:
     on_confirm=on_confirm_received,
     get_mode=lambda: getattr(cfg, "mode", "sandbox") or "sandbox",
     on_last_errors=on_last_errors,
+    dashboard_url=getattr(cfg.web, "dashboard_url", "") or "",
   )
 
   last_live_ping: datetime | None = None

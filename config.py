@@ -47,6 +47,7 @@ class TelegramConfig:
 class WebConfig:
   host: str
   port: int
+  dashboard_url: str = ""  # URL дашборда для кнопки в Telegram (например http://IP:8000/dashboard)
 
 
 @dataclass
@@ -265,7 +266,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
   risk_raw.setdefault("take_profit_pct", 0.03)
   risk_raw.setdefault("trailing_take_profit_pct", 0.02)
   risk = RiskConfig(**risk_raw)
-  web = WebConfig(**raw.get("web", {"host": "0.0.0.0", "port": 8000}))
+  web = WebConfig(**{**{"host": "0.0.0.0", "port": 8000, "dashboard_url": ""}, **raw.get("web", {})})
 
   instruments = []
   for i in raw["instruments"]:
