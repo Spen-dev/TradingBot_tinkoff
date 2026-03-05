@@ -26,7 +26,6 @@ DASHBOARD_HTML = """
     .brand { display: flex; align-items: center; gap: 10px; }
     .brand-logo { width: 28px; height: 28px; border-radius: 8px; background: radial-gradient(circle at 30% 20%, #ffe27a, #ff4d67); display: flex; align-items: center; justify-content: center; font-size: 16px; }
     .brand-title { font-weight: 600; font-size: 18px; }
-    .brand-subtitle { font-size: 12px; color: #a0a7c0; }
     .pill-switch { display: inline-flex; padding: 2px; border-radius: 999px; background: #111827; box-shadow: 0 0 0 1px rgba(255,255,255,0.06); }
     .pill-option { border: none; background: transparent; color: #a0a7c0; font-size: 11px; padding: 4px 10px; border-radius: 999px; cursor: pointer; }
     .pill-option-active { background: linear-gradient(90deg, #f97316, #facc15); color: #111827; font-weight: 600; }
@@ -51,10 +50,9 @@ DASHBOARD_HTML = """
     .pill-warn { background: rgba(250,204,21,0.14); color: #facc15; }
     .small { font-size: 12px; color: #9ca3af; }
     .chart-wrapper { height: 260px; }
-    .mode-headline { font-size: 18px; font-weight: 700; letter-spacing: 0.02em; margin-bottom: 8px; }
-    .mode-headline.mode-sandbox { color: #94a3b8; }
-    .mode-headline.mode-real { color: #f97316; }
     .text-ok { color: #4ade80; font-weight: 600; }
+    .mode-sandbox-val { color: #facc15; font-weight: 500; }
+    .mode-real-val { color: #4ade80; font-weight: 500; }
     .text-bad { color: #fb7185; font-weight: 600; }
   </style>
 </head>
@@ -64,7 +62,6 @@ DASHBOARD_HTML = """
       <div class="brand-logo">AI</div>
       <div>
         <div class="brand-title">tinkoff_bot</div>
-        <div class="brand-subtitle">Автономная арена стратегий</div>
       </div>
     </div>
     <div class="pill-switch">
@@ -148,18 +145,20 @@ DASHBOARD_HTML = """
         const allowed = status.trading_allowed;
         const riskText = allowed ? 'торговля разрешена' : 'торговля остановлена';
         const modeLabel = (status.mode === 'real' || status.mode === 'live') ? 'Реал' : 'Песочница';
-        const modeClass = modeLabel === 'Реал' ? 'mode-real' : 'mode-sandbox';
+        const modeValClass = modeLabel === 'Реал' ? 'mode-real-val' : 'mode-sandbox-val';
         const robotStatusHtml = status.robot_running
           ? 'Статус робота <span class="text-ok">Работает</span>, ' + riskText
           : 'Статус робота <span class="text-bad">Не работает</span>, ' + riskText;
         const uptimeStr = formatUptime(status.uptime_seconds || 0);
         sEl.innerHTML = `
-          <div class="mode-headline ${modeClass}">Режим — ${modeLabel}</div>
           <div class="metric-row">
             <div><span class="metric-label">Версия</span> <span class="metric-value">${status.version || '?'}</span></div>
           </div>
           <div class="small" style="margin-top:6px;">${robotStatusHtml}</div>
-          <div class="metric-row" style="margin-top:8px;">
+          <div class="metric-row" style="margin-top:6px;">
+            <div><span class="metric-label">Режим</span> <span class="metric-value ${modeValClass}">— ${modeLabel}</span></div>
+          </div>
+          <div class="metric-row" style="margin-top:6px;">
             <div><span class="metric-label">Свободные средства</span> <span class="metric-value">${fmtMoney(status.cash)} руб</span></div>
           </div>
           <div class="metric-row" style="margin-top:6px;">
