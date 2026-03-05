@@ -22,9 +22,9 @@ portfolio:
   cancel_open_orders_before_rebalance: true  # Отменять активные лимитные заявки робота по тем же FIGI перед ребалансом
   rebalance_by_price: true     # Считать целевые суммы по текущим ценам
   rebalance_on_drift: true     # Ребаланс по дрейфу весов между проверками
-  rebalance_drift_pct: 0.05    # Порог дрейфа для ребаланса (5%)
-  rebalance_check_interval_minutes: 30   # Интервал проверки дрейфа (мин)
-  rebalance_cooldown_minutes: 60         # Пауза между ребалансами по дрейфу (мин)
+  rebalance_drift_pct: 0.03    # Более агрессивный порог дрейфа для ребаланса (3% для теста)
+  rebalance_check_interval_minutes: 10   # Чаще проверять дрейф (каждые 10 мин)
+  rebalance_cooldown_minutes: 30         # Пауза между ребалансами по дрейфу (30 мин)
   rebalance_interval_hours: 0  # 0 = раз в день по rebalance_time; >0 = каждые N ч в окне
   retrain_days: 60             # Глубина истории для переобучения (самообучение)
   auto_retrain_interval_days: 7   # Автопереобучение раз в N дней (0 = выкл)
