@@ -175,7 +175,7 @@ DASHBOARD_HTML = """
           </div>
           <div class="small" style="margin-top:6px;">${riskText}</div>
           <div class="small" style="margin-top:6px;">След. ребаланс: ${status.next_rebalance || '-'}, дайджест: ${status.next_digest || '-'}</div>
-          <div class="small" style="margin-top:4px; color:#6b7280;">Обновлено: ${status.updated_at ? new Date(status.updated_at).toLocaleTimeString('ru-RU') : '—'}</div>
+          <div class="small" style="margin-top:4px; color:#6b7280;">Обновлено (МСК): ${status.updated_at ? new Date(status.updated_at).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow' }) : '—'}</div>
         `;
 
         const tbody = document.querySelector('#portfolio-table tbody');
