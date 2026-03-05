@@ -19,54 +19,104 @@ DASHBOARD_HTML = """
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <title>tinkoff_bot dashboard</title>
+  <title>tinkoff_bot — арена стратегий</title>
   <style>
-    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 16px; background: #0b1020; color: #e5e9f0; }
-    h1 { margin-top: 0; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
-    .card { background: #151a2c; border-radius: 8px; padding: 12px 16px; box-shadow: 0 0 0 1px rgba(255,255,255,0.03); }
-    .card h2 { margin: 0 0 8px 0; font-size: 16px; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { padding: 4px 6px; text-align: right; border-bottom: 1px solid rgba(255,255,255,0.05); }
-    th { text-align: left; font-weight: 500; color: #a0a7c0; }
-    tr:nth-child(even) { background: rgba(255,255,255,0.01); }
-    .status-ok { color: #8fda7f; }
-    .status-bad { color: #ff6b6b; }
-    .status-warn { color: #ffd166; }
-    .pill { display: inline-block; padding: 2px 6px; border-radius: 10px; font-size: 11px; }
-    .pill-ok { background: rgba(143,218,127,0.12); color: #8fda7f; }
-    .pill-bad { background: rgba(255,107,107,0.12); color: #ff6b6b; }
-    .pill-warn { background: rgba(255,209,102,0.12); color: #ffd166; }
-    .small { font-size: 12px; color: #a0a7c0; }
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 16px 24px 24px; background: #050816; color: #e5e9f0; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand-logo { width: 28px; height: 28px; border-radius: 8px; background: radial-gradient(circle at 30% 20%, #ffe27a, #ff4d67); display: flex; align-items: center; justify-content: center; font-size: 16px; }
+    .brand-title { font-weight: 600; font-size: 18px; }
+    .brand-subtitle { font-size: 12px; color: #a0a7c0; }
+    .pill-switch { display: inline-flex; padding: 2px; border-radius: 999px; background: #111827; box-shadow: 0 0 0 1px rgba(255,255,255,0.06); }
+    .pill-option { border: none; background: transparent; color: #a0a7c0; font-size: 11px; padding: 4px 10px; border-radius: 999px; cursor: pointer; }
+    .pill-option-active { background: linear-gradient(90deg, #f97316, #facc15); color: #111827; font-weight: 600; }
+    .tabs { display: flex; gap: 24px; border-bottom: 1px solid rgba(148,163,184,0.3); margin-bottom: 12px; }
+    .tab { padding: 8px 0; font-size: 13px; color: #94a3b8; border: none; background: none; cursor: pointer; position: relative; }
+    .tab-active { color: #f9fafb; font-weight: 600; }
+    .tab-active::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: linear-gradient(90deg, #22c55e, #3b82f6); border-radius: 999px; }
+    .layout { display: flex; gap: 16px; margin-top: 12px; }
+    .layout-left { flex: 0 0 320px; }
+    .layout-right { flex: 1; display: flex; flex-direction: column; gap: 16px; }
+    .card { background: #0b1120; border-radius: 12px; padding: 12px 16px; box-shadow: 0 0 0 1px rgba(15,23,42,0.9), 0 18px 45px rgba(15,23,42,0.8); }
+    .card h2 { margin: 0 0 8px 0; font-size: 15px; }
+    .metric-row { display: flex; flex-wrap: wrap; gap: 8px 12px; font-size: 12px; }
+    .metric-label { color: #9ca3af; }
+    .metric-value { font-weight: 500; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 4px 6px; text-align: right; border-bottom: 1px solid rgba(15,23,42,0.9); }
+    th { text-align: left; font-weight: 500; color: #9ca3af; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+    tr:nth-child(even) { background: rgba(15,23,42,0.8); }
+    .status-ok { color: #4ade80; }
+    .status-bad { color: #fb7185; }
+    .status-warn { color: #facc15; }
+    .pill { display: inline-block; padding: 2px 6px; border-radius: 999px; font-size: 11px; }
+    .pill-ok { background: rgba(34,197,94,0.14); color: #4ade80; }
+    .pill-bad { background: rgba(248,113,113,0.12); color: #fb7185; }
+    .pill-warn { background: rgba(250,204,21,0.14); color: #facc15; }
+    .small { font-size: 12px; color: #9ca3af; }
+    .tab-content { display: none; }
+    .tab-content-active { display: block; }
+    .chart-wrapper { height: 260px; }
   </style>
 </head>
 <body>
-  <h1>tinkoff_bot — dashboard</h1>
-  <div class="grid">
-    <div class="card" id="status-card">
-      <h2>Статус робота</h2>
-      <div id="status-body" class="small">Загрузка…</div>
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-logo">AI</div>
+      <div>
+        <div class="brand-title">tinkoff_bot</div>
+        <div class="brand-subtitle">Автономная арена стратегий</div>
+      </div>
     </div>
-    <div class="card">
-      <h2>Портфель</h2>
-      <table id="portfolio-table">
-        <thead>
-          <tr>
-            <th>Тикер</th>
-            <th>Кол-во</th>
-            <th>Цена</th>
-            <th>Сумма</th>
-            <th>Целевой вес</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+    <div class="pill-switch">
+      <button class="pill-option pill-option-active" id="market-ru" type="button">RU рынок</button>
+      <button class="pill-option" id="market-us" type="button">US рынок</button>
     </div>
   </div>
-  <div class="card" style="margin-top:16px;">
-    <h2>Эволюция стоимости портфеля</h2>
-    <canvas id="equity-chart" height="120"></canvas>
+
+  <div class="tabs">
+    <button class="tab tab-active" data-tab="evolution" type="button">Эволюция портфеля</button>
+    <button class="tab" data-tab="analysis" type="button">Анализ портфеля</button>
   </div>
+
+  <div class="layout">
+    <div class="layout-left">
+      <div class="card" id="status-card">
+        <h2>Статус робота</h2>
+        <div id="status-body" class="small">Загрузка…</div>
+      </div>
+    </div>
+    <div class="layout-right">
+      <div id="tab-evolution" class="tab-content tab-content-active">
+        <div class="card">
+          <h2>Общая стоимость портфеля</h2>
+          <div class="small" id="equity-subtitle">Equity по дням</div>
+          <div class="chart-wrapper">
+            <canvas id="equity-chart"></canvas>
+          </div>
+        </div>
+      </div>
+      <div id="tab-analysis" class="tab-content">
+        <div class="card">
+          <h2>Анализ портфеля</h2>
+          <table id="portfolio-table">
+            <thead>
+              <tr>
+                <th>Тикер</th>
+                <th>Кол-во</th>
+                <th>Цена</th>
+                <th>Сумма</th>
+                <th>Целевой вес</th>
+                <th>Стратегия</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
   <script>
@@ -84,6 +134,18 @@ DASHBOARD_HTML = """
       return (v || 0).toFixed(2) + '%';
     }
 
+    function initTabs() {
+      const tabs = document.querySelectorAll('.tab');
+      const contents = document.querySelectorAll('.tab-content');
+      tabs.forEach(btn => {
+        btn.addEventListener('click', () => {
+          const tab = btn.dataset.tab;
+          tabs.forEach(t => t.classList.toggle('tab-active', t === btn));
+          contents.forEach(c => c.classList.toggle('tab-content-active', c.id === 'tab-' + tab));
+        });
+      });
+    }
+
     async function refresh() {
       try {
         const [status, portfolio, equityHist] = await Promise.all([
@@ -97,14 +159,21 @@ DASHBOARD_HTML = """
         const riskText = allowed ? '<span class="pill pill-ok">торговля разрешена</span>'
                                  : '<span class="pill pill-bad">торговля остановлена</span>';
         sEl.innerHTML = `
-          <div>Версия: <b>${status.version || '?'}</b></div>
-          <div>Режим: <b>${status.mode}</b>, песочница: <b>${status.sandbox ? 'Да' : 'Нет'}</b></div>
-          <div>Equity: <b>${fmtMoney(status.equity)} RUB</b></div>
-          <div>Кэш: <b>${fmtMoney(status.cash)} RUB</b></div>
-          <div>Позиции: <b>${status.positions_count}</b></div>
-          <div>Дневной результат: <b>${fmtMoney(status.daily_pnl)} RUB</b></div>
-          <div>Просадка: <b>${fmtPct(status.drawdown_pct)}</b></div>
-          <div style="margin-top:6px;">${riskText}</div>
+          <div class="metric-row">
+            <div><span class="metric-label">Версия</span> <span class="metric-value">${status.version || '?'}</span></div>
+            <div><span class="metric-label">Режим</span> <span class="metric-value">${status.mode}</span></div>
+            <div><span class="metric-label">Песочница</span> <span class="metric-value">${status.sandbox ? 'Да' : 'Нет'}</span></div>
+          </div>
+          <div class="metric-row" style="margin-top:6px;">
+            <div><span class="metric-label">Equity</span> <span class="metric-value">${fmtMoney(status.equity)} RUB</span></div>
+            <div><span class="metric-label">Кэш</span> <span class="metric-value">${fmtMoney(status.cash)} RUB</span></div>
+            <div><span class="metric-label">Позиции</span> <span class="metric-value">${status.positions_count}</span></div>
+          </div>
+          <div class="metric-row" style="margin-top:6px;">
+            <div><span class="metric-label">Дневной результат</span> <span class="metric-value">${fmtMoney(status.daily_pnl)} RUB</span></div>
+            <div><span class="metric-label">Просадка</span> <span class="metric-value">${fmtPct(status.drawdown_pct)}</span></div>
+          </div>
+          <div class="small" style="margin-top:6px;">${riskText}</div>
           <div class="small" style="margin-top:6px;">След. ребаланс: ${status.next_rebalance || '-'}, дайджест: ${status.next_digest || '-'}</div>
         `;
 
@@ -117,12 +186,13 @@ DASHBOARD_HTML = """
             <td>${it.quantity}</td>
             <td>${fmtMoney(it.price)}</td>
             <td>${fmtMoney(it.value)}</td>
-            <td>${fmtPct(it.target_weight * 100)}</td>
+            <td>${fmtPct((it.target_weight || 0) * 100)}</td>
+            <td style="text-align:left;">${it.strategy || '-'}</td>
           `;
           tbody.appendChild(tr);
         });
 
-        // График equity: X — время, Y — сумма портфеля (equity)
+        // Эволюция стоимости портфеля: X — дата, Y — equity
         const pts = equityHist.points || [];
         const labels = pts.map(p => new Date(p.ts));
         const data = pts.map(p => p.equity);
@@ -135,9 +205,9 @@ DASHBOARD_HTML = """
               datasets: [{
                 label: 'Equity, RUB',
                 data,
-                borderColor: '#4fd1c5',
-                backgroundColor: 'rgba(79,209,197,0.15)',
-                tension: 0.25,
+                borderColor: '#38bdf8',
+                backgroundColor: 'rgba(56,189,248,0.12)',
+                tension: 0.3,
                 pointRadius: 0,
               }],
             },
@@ -149,11 +219,12 @@ DASHBOARD_HTML = """
                 x: {
                   type: 'time',
                   time: { unit: 'day', displayFormats: { day: 'dd.MM' } },
-                  ticks: { color: '#a0a7c0', maxTicksLimit: 10 },
+                  ticks: { color: '#9ca3af', maxTicksLimit: 10 },
+                  grid: { color: 'rgba(15,23,42,0.7)' },
                 },
                 y: {
-                  ticks: { color: '#a0a7c0' },
-                  grid: { color: 'rgba(255,255,255,0.05)' },
+                  ticks: { color: '#9ca3af' },
+                  grid: { color: 'rgba(15,23,42,0.7)' },
                 },
               },
             },
@@ -168,6 +239,7 @@ DASHBOARD_HTML = """
       }
     }
 
+    initTabs();
     refresh();
     setInterval(refresh, 5000);
   </script>
