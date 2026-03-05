@@ -4,6 +4,7 @@ from typing import Callable, Awaitable
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
+from aiogram.types import MenuButtonWebApp, WebAppInfo
 
 from .config import TelegramConfig
 from .telegram_utils import split_message
@@ -81,7 +82,7 @@ class TelegramController:
     on_last_errors: Callable[[], Awaitable[str]] | None = None,
     dashboard_url: str = "",
   ) -> None:
-    self._dashboard_url = dashboard_url or ""
+    self._dashboard_url = (dashboard_url or "").strip()
     self._on_start = on_start
     self._on_stop = on_stop
     self._on_stop_request = on_stop_request
@@ -244,29 +245,29 @@ class TelegramController:
         [types.InlineKeyboardButton(text="Открыть дашборд", url=self._dashboard_url)],
       ])
 
+    def _dashboard_message(self) -> tuple[str, types.InlineKeyboardMarkup | None]:
+      if not self._dashboard_url:
+        return "Укажите web.dashboard_url в config.yaml (например http://IP:8000/dashboard).", None
+      # Явная ссылка в HTML — в Telegram лучше открывается по нажатию
+      text = (
+        'Откройте дашборд в браузере (нажмите ссылку ниже или кнопку):\n'
+        f'<a href="{self._dashboard_url}">Открыть дашборд</a>'
+      )
+      return text, self._dashboard_reply_markup()
+
     @self.dp.message(Command("dashboard"))
     async def cmd_dashboard(msg: types.Message):
       if msg.chat.id != self.admin_chat_id:
         return
-      if self._dashboard_url:
-        await msg.answer(
-          f"Откройте дашборд в браузере (нажмите ссылку или кнопку):\n{self._dashboard_url}",
-          reply_markup=self._dashboard_reply_markup(),
-        )
-      else:
-        await msg.answer("Укажите web.dashboard_url в config.yaml (например http://IP:8000/dashboard).")
+      text, markup = self._dashboard_message()
+      await msg.answer(text, reply_markup=markup, parse_mode="HTML")
 
     @self.dp.message(lambda m: m.text and m.text.strip() == DASHBOARD_BUTTON_TEXT)
     async def btn_dashboard(msg: types.Message):
       if msg.chat.id != self.admin_chat_id:
         return
-      if self._dashboard_url:
-        await msg.answer(
-          f"Откройте дашборд в браузере (нажмите ссылку или кнопку):\n{self._dashboard_url}",
-          reply_markup=self._dashboard_reply_markup(),
-        )
-      else:
-        await msg.answer("Укажите web.dashboard_url в config.yaml (например http://IP:8000/dashboard).")
+      text, markup = self._dashboard_message()
+      await msg.answer(text, reply_markup=markup, parse_mode="HTML")
 
     @self.dp.message(Command("rebalance"))
     async def cmd_rebalance(msg: types.Message):
@@ -421,6 +422,13 @@ class TelegramController:
   async def run(self) -> None:
     """Запуск бота. Завершится, когда будет нажата кнопка СТОП или вызван /stop."""
     _log.info("Telegram polling запущен; ответы только в чате admin_chat_id=%s", self.admin_chat_id)
+    if self._dashboard_url:
+      try:
+        await self.bot.set_chat_menu_button(
+          menu_button=MenuButtonWebApp(text="📈 Дашборд", web_app=WebAppInfo(url=self._dashboard_url)),
+        )
+      except Exception as e:
+        _log.warning("Не удалось установить кнопку меню дашборда: %s (нужен HTTPS для Web App)", e)
     poll_task = asyncio.create_task(self.dp.start_polling(self.bot))
     await self._stop_event.wait()
     poll_task.cancel()
