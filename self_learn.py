@@ -570,6 +570,13 @@ def run_retrain(
         if best_range:
           update_learned_params(inst.figi, {"strategy_range": best_range.get("strategy", inst.strategy), "params_range": {k: v for k, v in best_range.items() if k != "_volatility_regime"}})
       if best:
+        # Guard-rail: не принимать параметры, если новый Sharpe значительно хуже старого
+        prev_info = (learned.get(inst.figi, {}) or {}).get("retrain_info") or {}
+        old_sharpe = float(prev_info.get("sharpe", 0.0) or 0.0)
+        sharpe_degradation_limit = 0.2  # допустимое ухудшение Sharpe
+        if old_sharpe > 0 and sharpe < old_sharpe - sharpe_degradation_limit:
+          lines.append(f"  {inst.ticker}: лучшие найденные параметры хуже старых (Sharpe≈{sharpe:.3f} < {old_sharpe:.3f}), пропущено")
+          continue
         update_learned_params(inst.figi, best)
         # Оценка для весов: симулируем PnL с лучшими параметрами за весь период
         rets: List[float] = []

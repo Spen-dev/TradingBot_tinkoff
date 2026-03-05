@@ -106,6 +106,24 @@ class RiskManager:
         return f"дневной убыток {daily_loss:.1%} > лимит {self.cfg.daily_loss_limit:.0%}"
     return None
 
+  def get_size_scale(self, state: RiskState) -> float:
+    """Мягкое снижение размера заявок при дневном убытке выше soft-лимита.
+
+    daily_loss <= soft_limit  -> 1.0 (без изменений)
+    soft_limit < daily_loss < daily_loss_limit -> daily_loss_soft_scale (например 0.5)
+    daily_loss >= daily_loss_limit -> 0.0 (торговля всё равно будет заблокирована is_trading_allowed)
+    """
+    soft_limit = getattr(self.cfg, "daily_loss_soft_limit", 0.0) or 0.0
+    scale = getattr(self.cfg, "daily_loss_soft_scale", 0.5) or 0.5
+    if soft_limit <= 0 or self._daily_equity_start is None or self._daily_equity_start <= 0:
+      return 1.0
+    daily_loss = (self._daily_equity_start - state.equity) / max(self._daily_equity_start, 1e-9)
+    if daily_loss <= soft_limit:
+      return 1.0
+    if daily_loss >= self.cfg.daily_loss_limit:
+      return 0.0
+    return max(0.0, min(scale, 1.0))
+
   def is_trading_allowed(self, state: RiskState) -> bool:
     if self._pause_until and datetime.now() < self._pause_until:
       return False

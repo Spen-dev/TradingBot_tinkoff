@@ -260,6 +260,13 @@ class PortfolioManager:
     if not self.risk.is_trading_allowed(risk_state):
       return []
 
+    # Мягкая деградация: при дневном убытке выше soft-лимита уменьшаем размер заявок.
+    size_scale = 1.0
+    try:
+      size_scale = getattr(self.risk, "get_size_scale", lambda _: 1.0)(risk_state)
+    except Exception:
+      size_scale = 1.0
+
     prices_for_target: Optional[Dict[str, float]] = None
     if getattr(self.cfg, "rebalance_by_price", False):
       prices_for_target = {}
@@ -559,7 +566,7 @@ class PortfolioManager:
       strength = signal.strength if signal and signal.side != "hold" else 1.0
       if strength < signal_strength_min:
         strength = signal_strength_min
-      qty = max(lot, int(math.floor(qty * strength / lot)) * lot)
+      qty = max(lot, int(math.floor(qty * strength * size_scale / lot)) * lot)
       if direction == OrderDirection.ORDER_DIRECTION_BUY:
         max_cost = remaining_cash * SAFETY
         if single_trade_max_pct > 0:
