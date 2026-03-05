@@ -68,6 +68,7 @@ DASHBOARD_HTML = """
     <canvas id="equity-chart" height="120"></canvas>
   </div>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
   <script>
     async function fetchJson(url) {
       const r = await fetch(url, { cache: 'no-store' });
@@ -121,9 +122,9 @@ DASHBOARD_HTML = """
           tbody.appendChild(tr);
         });
 
-        // График equity
+        // График equity: X — время, Y — сумма портфеля (equity)
         const pts = equityHist.points || [];
-        const labels = pts.map(p => p.ts);
+        const labels = pts.map(p => new Date(p.ts));
         const data = pts.map(p => p.equity);
         if (!window.equityChart) {
           const ctx = document.getElementById('equity-chart').getContext('2d');
@@ -146,6 +147,8 @@ DASHBOARD_HTML = """
               plugins: { legend: { display: false } },
               scales: {
                 x: {
+                  type: 'time',
+                  time: { unit: 'day', displayFormats: { day: 'dd.MM' } },
                   ticks: { color: '#a0a7c0', maxTicksLimit: 10 },
                 },
                 y: {
