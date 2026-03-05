@@ -23,13 +23,13 @@ class InstrumentConfig:
 class RiskConfig:
   max_drawdown: float
   daily_loss_limit: float
-  # Мягкая деградация при дневном убытке: сначала уменьшаем размер сделок, потом полный стоп.
-  daily_loss_soft_limit: float = 0.0  # 0 = выкл; >0 = включить мягкое снижение размера при превышении этого порога
-  daily_loss_soft_scale: float = 0.5  # во сколько раз уменьшать размер заявок при soft-limit (0.5 = вдвое)
   default_stop_loss_pct: float
   trailing_stop_pct: float
   var_confidence: float
   kelly_fraction_cap: float
+  # Мягкая деградация при дневном убытке: сначала уменьшаем размер сделок, потом полный стоп.
+  daily_loss_soft_limit: float = 0.0  # 0 = выкл; >0 = включить мягкое снижение размера при превышении этого порога
+  daily_loss_soft_scale: float = 0.5  # во сколько раз уменьшать размер заявок при soft-limit (0.5 = вдвое)
   pause_after_consecutive_losses: int = 0
   pause_hours: float = 24
   min_pnl_to_count_loss_rub: float = 0.0
