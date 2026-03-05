@@ -291,6 +291,15 @@ async def _write_response(
     pass
 
 
+def _now_msk_iso() -> str:
+  """Текущее время в МСК в формате ISO (для дашборда)."""
+  try:
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("Europe/Moscow")).isoformat()
+  except Exception:
+    return datetime.now().isoformat()
+
+
 def _load_status_snapshot() -> Dict[str, Any] | None:
   """Снимок статуса из основного цикла (актуальные PnL и просадка)."""
   try:
@@ -316,7 +325,7 @@ async def _handle_api_status(broker: "TinkoffBroker | None", cfg: "AppConfig | N
     daily_pnl = 0.0
     drawdown_pct = 0.0
     trading_allowed = True
-    updated_at = datetime.now().isoformat()
+    updated_at = _now_msk_iso()
     snap = _load_status_snapshot()
     if snap:
       equity = float(snap.get("equity", 0))
@@ -394,7 +403,7 @@ async def _handle_api_status(broker: "TinkoffBroker | None", cfg: "AppConfig | N
       "trading_allowed": False,
       "next_rebalance": "",
       "next_digest": "",
-      "updated_at": datetime.now().isoformat(),
+      "updated_at": _now_msk_iso(),
     }
 
 

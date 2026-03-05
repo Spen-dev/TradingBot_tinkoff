@@ -579,11 +579,16 @@ async def main() -> None:
         append_equity_point(now, eq, cs, npos)
         st = risk.update_equity(eq, day_start_equity or eq)
         dd = (st.max_equity_seen - st.equity) / max(st.max_equity_seen, 1e-9) if st.max_equity_seen else 0.0
+        try:
+          from zoneinfo import ZoneInfo
+          updated_at_msk = datetime.now(ZoneInfo("Europe/Moscow")).isoformat()
+        except Exception:
+          updated_at_msk = now.isoformat()
         snapshot = {
           "equity": eq, "cash": cs, "positions_count": npos,
           "daily_pnl": st.daily_pnl, "drawdown_pct": round(dd * 100, 2),
           "trading_allowed": risk.is_trading_allowed(st),
-          "updated_at": now.isoformat(),
+          "updated_at": updated_at_msk,
         }
         _snap_dir = Path(__file__).resolve().parent / "data"
         _snap_dir.mkdir(parents=True, exist_ok=True)
