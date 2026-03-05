@@ -213,38 +213,31 @@ async def main() -> None:
       allowed = risk.is_trading_allowed(st)
       allowed_str = "Да" if allowed else "Нет"
       sandbox_str = "Да" if cfg.tinkoff.use_sandbox else "Нет"
-      mode_str = getattr(cfg, "mode", "sandbox") or "sandbox"
-      dry_run_str = "Да" if getattr(cfg.portfolio, "dry_run", False) else "Нет"
-      now = datetime.now()
-      rt = getattr(cfg.portfolio, "rebalance_time", "10:00") or "10:00"
-      try:
-        rh, rm = map(int, rt.split(":"))
-      except (ValueError, AttributeError):
-        rh, rm = 10, 0
-      digest_t = getattr(cfg.portfolio, "daily_digest_time", "18:00") or "18:00"
-      try:
-        dh, dm = map(int, digest_t.split(":"))
-      except (ValueError, AttributeError):
-        dh, dm = 18, 0
-      next_reb = now.replace(hour=rh, minute=rm, second=0, microsecond=0)
-      if next_reb <= now:
-        next_reb += timedelta(days=1)
-      next_dig = now.replace(hour=dh, minute=dm, second=0, microsecond=0)
-      if next_dig <= now:
-        next_dig += timedelta(days=1)
+      robot_status = "работает" if started else "не работает"
+      delta = datetime.now() - robot_started_at
+      total_sec = max(0, int(delta.total_seconds()))
+      days = total_sec // 86400
+      rest = total_sec % 86400
+      hours = rest // 3600
+      minutes = (rest % 3600) // 60
+      uptime_parts = []
+      if days > 0:
+        uptime_parts.append(f"{days} дн.")
+      if hours > 0 or days > 0:
+        uptime_parts.append(f"{hours} ч")
+      uptime_parts.append(f"{minutes} мин")
+      uptime_str = " ".join(uptime_parts)
       lines = [
         f"Версия: {app_version}",
-        f"Режим: {mode_str}",
-        f"Dry-run: {dry_run_str}",
+        f"Статус робота: {robot_status}",
         f"Песочница: {sandbox_str}",
-        f"Деньги на счёте: {format_money(cash, cfg.portfolio.base_currency)}",
-        f"Портфель: {format_money(equity, cfg.portfolio.base_currency)}",
+        f"Эквити: {format_money(equity, cfg.portfolio.base_currency)}",
+        f"Свободные средства: {format_money(cash, cfg.portfolio.base_currency)}",
         f"Позиций: {npos}",
         f"Дневной результат: {format_money(st.daily_pnl, cfg.portfolio.base_currency)}",
-        f"Текущая просадка: {format_pct(drawdown * 100)}",
+        f"Просадка: {format_pct(drawdown * 100)}",
         f"Торговля разрешена: {allowed_str}",
-        f"След. ребаланс: {next_reb.strftime('%H:%M')}",
-        f"След. дайджест: {next_dig.strftime('%H:%M')}",
+        f"Время работы: {uptime_str}",
       ]
       return "\n".join(lines)
     except Exception:
@@ -501,7 +494,7 @@ async def main() -> None:
 
   try:
     from tinkoff_bot.health_server import run_health_server
-    health_server = await run_health_server(cfg.web.host, cfg.web.port, broker, cfg, lambda: started)
+    health_server = await run_health_server(cfg.web.host, cfg.web.port, broker, cfg, lambda: started, lambda: robot_started_at)
   except Exception:
     health_server = None
 
