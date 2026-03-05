@@ -245,29 +245,30 @@ class TelegramController:
         [types.InlineKeyboardButton(text="Открыть дашборд", url=self._dashboard_url)],
       ])
 
-    def _dashboard_message(self) -> tuple[str, types.InlineKeyboardMarkup | None]:
+    def _dashboard_message(self) -> tuple[str, types.InlineKeyboardMarkup | None, bool]:
+      """Возвращает (текст, reply_markup или None, use_html)."""
       if not self._dashboard_url:
-        return "Укажите web.dashboard_url в config.yaml (например http://IP:8000/dashboard).", None
-      # Явная ссылка в HTML — в Telegram лучше открывается по нажатию
+        return "Укажите web.dashboard_url в config.yaml (например http://IP:8000/dashboard).", None, False
+      # Ссылка отдельной строкой — Telegram подчёркивает и делает кликабельной; плюс кнопка под сообщением
       text = (
-        'Откройте дашборд в браузере (нажмите ссылку ниже или кнопку):\n'
-        f'<a href="{self._dashboard_url}">Открыть дашборд</a>'
+        f"{self._dashboard_url}\n\n"
+        "Нажмите на ссылку выше или на кнопку ниже. Если не открывается — скопируйте ссылку в браузер."
       )
-      return text, self._dashboard_reply_markup()
+      return text, self._dashboard_reply_markup(), False
 
     @self.dp.message(Command("dashboard"))
     async def cmd_dashboard(msg: types.Message):
       if msg.chat.id != self.admin_chat_id:
         return
-      text, markup = self._dashboard_message()
-      await msg.answer(text, reply_markup=markup, parse_mode="HTML")
+      text, markup, use_html = self._dashboard_message()
+      await msg.answer(text, reply_markup=markup, parse_mode="HTML" if use_html else None)
 
-    @self.dp.message(lambda m: m.text and m.text.strip() == DASHBOARD_BUTTON_TEXT)
+    @self.dp.message(lambda m: m.text and (m.text.strip() == DASHBOARD_BUTTON_TEXT or "Дашборд" in (m.text or "")))
     async def btn_dashboard(msg: types.Message):
       if msg.chat.id != self.admin_chat_id:
         return
-      text, markup = self._dashboard_message()
-      await msg.answer(text, reply_markup=markup, parse_mode="HTML")
+      text, markup, use_html = self._dashboard_message()
+      await msg.answer(text, reply_markup=markup, parse_mode="HTML" if use_html else None)
 
     @self.dp.message(Command("rebalance"))
     async def cmd_rebalance(msg: types.Message):
