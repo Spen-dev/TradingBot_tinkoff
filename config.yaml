@@ -113,7 +113,7 @@ risk:
 web:
   host: "0.0.0.0"              # Хост HTTP health-check
   port: 8000                   # Порт HTTP health-check
-  dashboard_url: ""            # URL дашборда для кнопки в Telegram (например http://IP:8000/dashboard)
+  dashboard_url: "http://144.31.77.154:8000/dashboard"  # URL дашборда для кнопки в Telegram
 
 instruments:
   # figi — идентификатор бумаги, ticker — тикер, lot — размер лота, strategy — стратегия (rl, momentum, ...)
