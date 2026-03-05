@@ -63,6 +63,11 @@ DASHBOARD_HTML = """
       </table>
     </div>
   </div>
+  <div class="card" style="margin-top:16px;">
+    <h2>Эволюция стоимости портфеля</h2>
+    <canvas id="equity-chart" height="120"></canvas>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
     async function fetchJson(url) {
       const r = await fetch(url, { cache: 'no-store' });
@@ -80,9 +85,10 @@ DASHBOARD_HTML = """
 
     async function refresh() {
       try {
-        const [status, portfolio] = await Promise.all([
+        const [status, portfolio, equityHist] = await Promise.all([
           fetchJson('/api/status'),
           fetchJson('/api/portfolio'),
+          fetchJson('/api/equity'),
         ]);
 
         const sEl = document.getElementById('status-body');
@@ -114,6 +120,48 @@ DASHBOARD_HTML = """
           `;
           tbody.appendChild(tr);
         });
+
+        // График equity
+        const pts = equityHist.points || [];
+        const labels = pts.map(p => new Date(p.ts));
+        const data = pts.map(p => p.equity);
+        if (!window.equityChart) {
+          const ctx = document.getElementById('equity-chart').getContext('2d');
+          window.equityChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels,
+              datasets: [{
+                label: 'Equity, RUB',
+                data,
+                borderColor: '#4fd1c5',
+                backgroundColor: 'rgba(79,209,197,0.15)',
+                tension: 0.25,
+                pointRadius: 0,
+              }],
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: {
+                x: {
+                  type: 'time',
+                  time: { unit: 'hour', displayFormats: { hour: 'dd.MM HH:mm' } },
+                  ticks: { color: '#a0a7c0', maxTicksLimit: 10 },
+                },
+                y: {
+                  ticks: { color: '#a0a7c0' },
+                  grid: { color: 'rgba(255,255,255,0.05)' },
+                },
+              },
+            },
+          });
+        } else {
+          window.equityChart.data.labels = labels;
+          window.equityChart.data.datasets[0].data = data;
+          window.equityChart.update('none');
+        }
       } catch (e) {
         document.getElementById('status-body').innerHTML = '<span class="status-bad">Ошибка загрузки: ' + e.message + '</span>';
       }
@@ -144,70 +192,83 @@ async def _write_response(writer: asyncio.StreamWriter, status: int, body: bytes
 
 
 async def _handle_api_status(broker: "TinkoffBroker | None", cfg: "AppConfig | None") -> Dict[str, Any]:
-  from .risk import RiskManager
-  cash = 0.0
-  equity = 0.0
-  positions_count = 0
-  daily_pnl = 0.0
-  drawdown_pct = 0.0
-  trading_allowed = True
-  if broker and cfg:
+  """Безопасный статус для дашборда: при любой ошибке возвращает заглушку, а не 500."""
+  try:
+    from .risk import RiskManager
+    cash = 0.0
+    equity = 0.0
+    positions_count = 0
+    daily_pnl = 0.0
+    drawdown_pct = 0.0
+    trading_allowed = True
+    if broker and cfg:
+      try:
+        cash = broker.get_cash_balance(cfg.portfolio.base_currency)
+        positions = broker.get_portfolio()
+        positions_count = len(positions)
+        equity = cash + sum(p.value for p in positions.values())
+        rm = RiskManager(cfg.risk)
+        state = rm.update_equity(equity, equity)
+        trading_allowed = cfg.portfolio.trading_enabled and rm.is_trading_allowed(state)
+      except Exception as e:
+        logger.debug("api_status: broker/risk error: %s", e)
+    next_reb = ""
+    next_dig = ""
     try:
-      cash = broker.get_cash_balance(cfg.portfolio.base_currency)
-      positions = broker.get_portfolio()
-      positions_count = len(positions)
-      equity = cash + sum(p.value for p in positions.values())
-      # Приближённая оценка состояния риска (без сохранённой истории)
-      rm = RiskManager(cfg.risk)
-      state = rm.update_equity(equity, equity)
-      trading_allowed = cfg.portfolio.trading_enabled and rm.is_trading_allowed(state)
+      now = datetime.now()
+      rt = getattr(cfg.portfolio, "rebalance_time", "10:00") if cfg else "10:00"
+      dh = getattr(cfg.portfolio, "daily_digest_time", "18:00") if cfg else "18:00"
+      rh, rm = map(int, str(rt).split(":"))
+      d_h, d_m = map(int, str(dh).split(":"))
+      from datetime import timedelta
+      nr = now.replace(hour=rh, minute=rm, second=0, microsecond=0)
+      if nr <= now:
+        nr += timedelta(days=1)
+      nd = now.replace(hour=d_h, minute=d_m, second=0, microsecond=0)
+      if nd <= now:
+        nd += timedelta(days=1)
+      next_reb = nr.strftime("%H:%M")
+      next_dig = nd.strftime("%H:%M")
+    except Exception as e:
+      logger.debug("api_status: schedule error: %s", e)
+    mode = "sandbox"
+    sandbox = True
+    if cfg:
+      mode = getattr(cfg, "mode", "sandbox")
+      sandbox = bool(getattr(cfg.tinkoff, "use_sandbox", True))
+    try:
+      from importlib import metadata
+      version = metadata.version("tinkoff_bot")
     except Exception:
-      pass
-  # Оценка next_rebalance / next_digest по cfg (локально, как в /status)
-  next_reb = ""
-  next_dig = ""
-  try:
-    now = datetime.now()
-    rt = getattr(cfg.portfolio, "rebalance_time", "10:00") if cfg else "10:00"
-    dh = getattr(cfg.portfolio, "daily_digest_time", "18:00") if cfg else "18:00"
-    rh, rm = map(int, str(rt).split(":"))
-    d_h, d_m = map(int, str(dh).split(":"))
-    nr = now.replace(hour=rh, minute=rm, second=0, microsecond=0)
-    if nr <= now:
-      from datetime import timedelta
-      nr += timedelta(days=1)
-    nd = now.replace(hour=d_h, minute=d_m, second=0, microsecond=0)
-    if nd <= now:
-      from datetime import timedelta
-      nd += timedelta(days=1)
-    next_reb = nr.strftime("%H:%M")
-    next_dig = nd.strftime("%H:%M")
-  except Exception:
-    pass
-  mode = "sandbox"
-  sandbox = True
-  if cfg:
-    mode = getattr(cfg, "mode", "sandbox")
-    sandbox = bool(getattr(cfg.tinkoff, "use_sandbox", True))
-  try:
-    from importlib import metadata
-    version = metadata.version("tinkoff_bot")
-  except Exception:
-    version = "0.1.0"
-  # Берём последний ежедневный PnL и просадку из Telegram-логики не можем, оставляем 0
-  return {
-    "version": version,
-    "mode": mode,
-    "sandbox": sandbox,
-    "equity": equity,
-    "cash": cash,
-    "positions_count": positions_count,
-    "daily_pnl": daily_pnl,
-    "drawdown_pct": drawdown_pct,
-    "trading_allowed": trading_allowed,
-    "next_rebalance": next_reb,
-    "next_digest": next_dig,
-  }
+      version = "0.1.0"
+    return {
+      "version": version,
+      "mode": mode,
+      "sandbox": sandbox,
+      "equity": equity,
+      "cash": cash,
+      "positions_count": positions_count,
+      "daily_pnl": daily_pnl,
+      "drawdown_pct": drawdown_pct,
+      "trading_allowed": trading_allowed,
+      "next_rebalance": next_reb,
+      "next_digest": next_dig,
+    }
+  except Exception as e:
+    logger.debug("api_status: fatal error: %s", e)
+    return {
+      "version": "0.1.0",
+      "mode": "sandbox",
+      "sandbox": True,
+      "equity": 0.0,
+      "cash": 0.0,
+      "positions_count": 0,
+      "daily_pnl": 0.0,
+      "drawdown_pct": 0.0,
+      "trading_allowed": False,
+      "next_rebalance": "",
+      "next_digest": "",
+    }
 
 
 async def _handle_api_portfolio(broker: "TinkoffBroker | None", cfg: "AppConfig | None") -> Dict[str, Any]:
@@ -243,6 +304,17 @@ async def _handle_api_portfolio(broker: "TinkoffBroker | None", cfg: "AppConfig 
   return {"instruments": instruments}
 
 
+async def _handle_api_equity() -> Dict[str, Any]:
+  from .equity_history import load_equity_history
+  points = load_equity_history(limit=500)
+  return {
+    "points": [
+      {"ts": p.ts, "equity": p.equity, "cash": p.cash, "positions": p.positions}
+      for p in points
+    ]
+  }
+
+
 async def handle_health(
   reader: asyncio.StreamReader,
   writer: asyncio.StreamWriter,
@@ -270,13 +342,9 @@ async def handle_health(
       await _write_response(writer, 200, DASHBOARD_HTML.encode("utf-8"), "text/html; charset=utf-8")
       return
     if "GET /api/status" in line:
-      try:
-        body_obj = await _handle_api_status(broker, cfg)
-        body = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
-        await _write_response(writer, 200, body, "application/json; charset=utf-8")
-      except Exception as e:
-        logger.debug("api/status error: %s", e)
-        await _write_response(writer, 500, b"{}", "application/json; charset=utf-8")
+      body_obj = await _handle_api_status(broker, cfg)
+      body = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
+      await _write_response(writer, 200, body, "application/json; charset=utf-8")
       return
     if "GET /api/portfolio" in line:
       try:
@@ -286,6 +354,15 @@ async def handle_health(
       except Exception as e:
         logger.debug("api/portfolio error: %s", e)
         await _write_response(writer, 500, b"{}", "application/json; charset=utf-8")
+      return
+    if "GET /api/equity" in line:
+      try:
+        body_obj = await _handle_api_equity()
+      except Exception as e:
+        logger.debug("api/equity error: %s", e)
+        body_obj = {"points": []}
+      body = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
+      await _write_response(writer, 200, body, "application/json; charset=utf-8")
       return
     if "GET /health" in line:
       broker_ok = False

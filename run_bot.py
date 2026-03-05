@@ -552,6 +552,13 @@ async def main() -> None:
       now = datetime.now()
       if not started:
         continue
+      # Логирование equity для дашборда
+      try:
+        from tinkoff_bot.equity_history import append_equity_point
+        eq, cs, npos = compute_equity()
+        append_equity_point(now, eq, cs, npos)
+      except Exception:
+        pass
       if auto_strategy_selection_on_start and not strategy_selection_start_done:
         strategy_selection_start_done = True
         try:
