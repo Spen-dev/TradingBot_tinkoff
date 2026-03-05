@@ -273,7 +273,7 @@ class PortfolioManager:
     use_deepseek = getattr(self.cfg, "use_deepseek_advisor", False)
     instruments_list = list(self.instruments_cfg.values())
     has_deepseek = any(
-      s == "deepseek" or (isinstance(getattr(c, "strategy", None), list) and "deepseek" in getattr(c, "strategy", []))
+      (getattr(c, "strategy", None) == "deepseek") or (isinstance(getattr(c, "strategy", None), list) and "deepseek" in getattr(c, "strategy", []))
       for c in instruments_list
     )
     if use_deepseek and has_deepseek:
