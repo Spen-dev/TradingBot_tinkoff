@@ -143,24 +143,33 @@ DASHBOARD_HTML = """
         const allowed = status.trading_allowed;
         const riskText = allowed ? '<span class="pill pill-ok">торговля разрешена</span>'
                                  : '<span class="pill pill-bad">торговля остановлена</span>';
-        const robotStatus = status.robot_running ? 'Работает' : 'Не работает';
+        const robotStatusText = status.robot_running ? 'Работает' : 'Не работает';
+        const robotStatusPill = status.robot_running
+          ? '<span class="pill pill-ok">Статус робота ' + robotStatusText + '</span>'
+          : '<span class="pill pill-bad">Статус робота ' + robotStatusText + '</span>';
         const uptimeStr = formatUptime(status.uptime_seconds || 0);
         sEl.innerHTML = `
           <div class="metric-row">
             <div><span class="metric-label">Версия</span> <span class="metric-value">${status.version || '?'}</span></div>
-            <div><span class="metric-label">Статус робота</span> <span class="metric-value">${robotStatus}</span></div>
+          </div>
+          <div class="small" style="margin-top:6px;">${robotStatusPill}</div>
+          <div class="small" style="margin-top:6px;">${riskText}</div>
+          <div class="metric-row" style="margin-top:6px;">
             <div><span class="metric-label">Песочница</span> <span class="metric-value">${status.sandbox ? 'Да' : 'Нет'}</span></div>
           </div>
           <div class="metric-row" style="margin-top:6px;">
-            <div><span class="metric-label">Эквити</span> <span class="metric-value">${fmtMoney(status.equity)} руб</span></div>
             <div><span class="metric-label">Свободные средства</span> <span class="metric-value">${fmtMoney(status.cash)} руб</span></div>
+          </div>
+          <div class="metric-row" style="margin-top:6px;">
+            <div><span class="metric-label">Стоимость всех открытых позиций</span> <span class="metric-value">${fmtMoney((status.equity || 0) - (status.cash || 0))} руб</span></div>
+          </div>
+          <div class="metric-row" style="margin-top:6px;">
             <div><span class="metric-label">Позиции</span> <span class="metric-value">${status.positions_count}</span></div>
           </div>
           <div class="metric-row" style="margin-top:6px;">
             <div><span class="metric-label">Дневной результат</span> <span class="metric-value">${fmtMoney(status.daily_pnl)} руб</span></div>
             <div><span class="metric-label">Просадка</span> <span class="metric-value">${fmtPct(status.drawdown_pct)}</span></div>
           </div>
-          <div class="small" style="margin-top:6px;">${riskText}</div>
           <div class="small" style="margin-top:6px;">Время работы: ${uptimeStr}</div>
           <div class="small" style="margin-top:4px; color:#6b7280;">Обновлено (МСК): ${status.updated_at ? new Date(status.updated_at).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow' }) : '—'}</div>
         `;
