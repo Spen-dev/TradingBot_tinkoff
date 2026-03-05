@@ -315,12 +315,15 @@ async def main() -> None:
       now_mins = now.hour * 60 + now.minute
       in_window = (w_start == 0 and w_end >= 24 * 60) or (rt_mins + w_start <= now_mins <= w_end)
       prefix = ""
-      if not in_window:
-        prefix = "⚠️ Сейчас вне торгового окна. "
       if not trading_enabled:
         orders = pm.build_rebalance_orders(day_start_equity or 0)
         await send_alert(tg, f"📋 Режим мониторинга: было бы заявок {len(orders)} (заявки не выставлены)", "monitoring")
+        if not in_window:
+          prefix = "⚠️ Сейчас вне торгового окна. "
         return prefix + f"Мониторинг: заявок не выставлено (было бы {len(orders)})"
+      if not in_window:
+        # Торговля включена, но сейчас вне торгового окна — ручной ребаланс не выполняем.
+        return "⚠️ Сейчас вне торгового окна. Ребаланс не выполняется."
       try:
         from tinkoff_bot.trade_history import get_consecutive_losses
         min_pnl = getattr(cfg.risk, "min_pnl_to_count_loss_rub", 0.0) or 0.0
