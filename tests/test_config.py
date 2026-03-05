@@ -59,7 +59,7 @@ def test_load_config_minimal():
                 "var_confidence": 0.95,
                 "kelly_fraction_cap": 0.5,
             },
-            "web": {"host": "0.0.0.0", "port": 8000},
+            "web": {"host": "0.0.0.0", "port": 8000, "dashboard_url": ""},
             "instruments": [
                 {"figi": "F1", "ticker": "A", "strategy": "rl", "target_weight": 0.5, "strategy_params": {}, "lot": 1},
                 {"figi": "F2", "ticker": "B", "strategy": "rl", "target_weight": 0.5, "strategy_params": {}, "lot": 1},

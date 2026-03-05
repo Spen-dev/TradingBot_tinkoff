@@ -26,7 +26,8 @@ def get_main_keyboard() -> types.ReplyKeyboardMarkup:
     keyboard=[
       [types.KeyboardButton(text=START_BUTTON_TEXT)],
       [types.KeyboardButton(text="📊 Статус"), types.KeyboardButton(text=POSITIONS_BUTTON_TEXT)],
-      [types.KeyboardButton(text=PORTFOLIO_BUTTON_TEXT), types.KeyboardButton(text=DASHBOARD_BUTTON_TEXT)],
+      [types.KeyboardButton(text=PORTFOLIO_BUTTON_TEXT)],
+      [types.KeyboardButton(text=DASHBOARD_BUTTON_TEXT)],
       [types.KeyboardButton(text=STOP_BUTTON_TEXT)],
     ],
     resize_keyboard=True,
