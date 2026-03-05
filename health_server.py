@@ -73,7 +73,6 @@ DASHBOARD_HTML = """
   <div class="layout">
     <div class="layout-left">
       <div class="card" id="status-card">
-        <h2>Статус робота</h2>
         <div id="status-body" class="small">Загрузка…</div>
       </div>
     </div>
@@ -142,6 +141,13 @@ DASHBOARD_HTML = """
         ]);
 
         const sEl = document.getElementById('status-body');
+        const allowed = status.trading_allowed;
+        const riskHtml = allowed
+          ? '<span class="text-ok">торговля разрешена</span>'
+          : '<span class="text-bad">торговля остановлена</span>';
+        const robotStatusHtml = status.robot_running
+          ? 'Статус робота <span class="text-ok">Работает</span>, ' + riskHtml
+          : 'Статус робота <span class="text-bad">Не работает</span>, ' + riskHtml;
         const modeLabel = (status.mode === 'real' || status.mode === 'live') ? 'Реал' : 'Песочница';
         const modeValClass = modeLabel === 'Реал' ? 'mode-real-val' : 'mode-sandbox-val';
         const uptimeStr = formatUptime(status.uptime_seconds || 0);
@@ -149,6 +155,7 @@ DASHBOARD_HTML = """
           <div class="metric-row">
             <div><span class="metric-label">Версия</span> <span class="metric-value">${status.version || '?'}</span></div>
           </div>
+          <div class="small" style="margin-top:6px;">${robotStatusHtml}</div>
           <div class="metric-row" style="margin-top:6px;">
             <div><span class="metric-label">Режим</span> <span class="metric-value ${modeValClass}">— ${modeLabel}</span></div>
           </div>
