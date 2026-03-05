@@ -249,7 +249,10 @@ class TelegramController:
       if msg.chat.id != self.admin_chat_id:
         return
       if self._dashboard_url:
-        await msg.answer("Откройте дашборд в браузере:", reply_markup=self._dashboard_reply_markup())
+        await msg.answer(
+          f"Откройте дашборд в браузере (нажмите ссылку или кнопку):\n{self._dashboard_url}",
+          reply_markup=self._dashboard_reply_markup(),
+        )
       else:
         await msg.answer("Укажите web.dashboard_url в config.yaml (например http://IP:8000/dashboard).")
 
@@ -258,7 +261,10 @@ class TelegramController:
       if msg.chat.id != self.admin_chat_id:
         return
       if self._dashboard_url:
-        await msg.answer("Откройте дашборд в браузере:", reply_markup=self._dashboard_reply_markup())
+        await msg.answer(
+          f"Откройте дашборд в браузере (нажмите ссылку или кнопку):\n{self._dashboard_url}",
+          reply_markup=self._dashboard_reply_markup(),
+        )
       else:
         await msg.answer("Укажите web.dashboard_url в config.yaml (например http://IP:8000/dashboard).")
 
