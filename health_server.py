@@ -349,11 +349,11 @@ async def handle_health(
     if "GET /api/portfolio" in line:
       try:
         body_obj = await _handle_api_portfolio(broker, cfg)
-        body = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
-        await _write_response(writer, 200, body, "application/json; charset=utf-8")
       except Exception as e:
         logger.debug("api/portfolio error: %s", e)
-        await _write_response(writer, 500, b"{}", "application/json; charset=utf-8")
+        body_obj = {"instruments": []}
+      body = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
+      await _write_response(writer, 200, body, "application/json; charset=utf-8")
       return
     if "GET /api/equity" in line:
       try:
