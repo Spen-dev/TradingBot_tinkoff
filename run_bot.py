@@ -340,6 +340,20 @@ async def main() -> None:
           await send_alert(tg, f"⏸ Торговля приостановлена на {ph:.0f} ч из-за серии убытков ({consecutive} подряд).", "pause")
       except Exception:
         pass
+      # Логируем рассчитанные заявки, чтобы отличать "нет отклонений" от "не удалось выставить".
+      try:
+        planned_orders = pm.build_rebalance_orders(day_start_equity or 0)
+      except Exception as e:
+        planned_orders = []
+        logger.debug("build_rebalance_orders failed: %s", e)
+      logger.info(
+        "Ребаланс (ручной): planned_orders=%d, dry_run=%s, equity=%.2f, cash=%.2f, positions=%d",
+        len(planned_orders),
+        dry_run,
+        equity,
+        cash,
+        npos,
+      )
       # Исполнение ребаланса выносим в отдельный поток, чтобы не блокировать event loop.
       loop = asyncio.get_running_loop()
       trades = await loop.run_in_executor(None, lambda: pm.execute_rebalance(day_start_equity or 0))
@@ -361,7 +375,9 @@ async def main() -> None:
         if dry_run:
           msg += " (симуляция, dry-run)"
         return prefix + msg
-      return prefix + "Заявки не нужны (нет инструментов/нет отклонений/риск-лимиты)"
+      if not planned_orders:
+        return prefix + "Заявки не нужны (нет отклонений)"
+      return prefix + f"Заявки не выставлены (рассчитано {len(planned_orders)}, выставлено 0 — см. bot.log)"
     except Exception as e:
       inc_error()
       logger.exception("on_rebalance: %s", e)
@@ -556,6 +572,30 @@ async def main() -> None:
     market_vol_level: str = "normal"  # low / normal / high
     panic_today: bool = False
 
+    tz_name = (getattr(cfg.portfolio, "trading_timezone", None) or "").strip()
+
+    def _mins_to_hhmm(m: int) -> str:
+      m = int(m) % (24 * 60)
+      return f"{m // 60:02d}:{m % 60:02d}"
+
+    window_start_mins = rt_mins + window_start
+    window_end_mins = window_end
+    logger.info(
+      "Планировщик ребаланса: время=%s, окно=%s–%s (%s), drift=%s порог=%.2f интервал=%dм cooldown=%dм",
+      rebalance_time,
+      _mins_to_hhmm(window_start_mins),
+      _mins_to_hhmm(window_end_mins),
+      tz_name or "локально",
+      "on" if on_drift else "off",
+      drift_pct,
+      check_interval,
+      cooldown_min,
+    )
+
+    last_window_state: bool | None = None
+    last_window_state_date: date | None = None
+    last_started_state: bool | None = None
+
     def _in_rebalance_window() -> bool:
       wnow = _now_for_window()
       now_mins = wnow.hour * 60 + wnow.minute
@@ -566,6 +606,40 @@ async def main() -> None:
     while True:
       await asyncio.sleep(60)
       now = datetime.now()
+      wnow = _now_for_window()
+      today = wnow.date()
+
+      if last_started_state is None or bool(started) != last_started_state:
+        last_started_state = bool(started)
+        logger.info("Планировщик: started=%s (server=%s window=%s %s)", started, now.isoformat(), wnow.isoformat(), tz_name or "local")
+
+      in_window = _in_rebalance_window()
+      if (last_window_state is None) or (in_window != last_window_state) or (last_window_state_date != today):
+        last_window_state = in_window
+        last_window_state_date = today
+        if in_window:
+          logger.info(
+            "Окно ребаланса: ВХОД (%s), now=%s, окно=%s–%s, last_rebalance_date=%s, panic_today=%s",
+            tz_name or "локально",
+            wnow.isoformat(),
+            _mins_to_hhmm(window_start_mins),
+            _mins_to_hhmm(window_end_mins),
+            last_rebalance_date,
+            panic_today,
+          )
+          if panic_today:
+            logger.info("Авторебаланс по расписанию: пропуск (kill-switch сегодня активен)")
+          elif last_rebalance_date == today:
+            logger.info("Авторебаланс по расписанию: пропуск (уже выполнялся сегодня)")
+        else:
+          logger.info(
+            "Окно ребаланса: ВЫХОД (%s), now=%s, окно=%s–%s",
+            tz_name or "локально",
+            wnow.isoformat(),
+            _mins_to_hhmm(window_start_mins),
+            _mins_to_hhmm(window_end_mins),
+          )
+
       if not started:
         continue
       # Логирование equity и снимок статуса для дашборда (актуальные PnL и просадка)
@@ -661,7 +735,6 @@ async def main() -> None:
           last_live_ping = now
           await send_alert(tg, "🤖 Робот работает.", "live_ping")
       day_start = day_start_equity or 0.0
-      today = now.date()
       # Ежедневная оценка состояния рынка по индексу
       if market_index_figi and last_market_check_date != today:
         last_market_check_date = today
@@ -701,13 +774,19 @@ async def main() -> None:
       if last_day_reset_date is None and day_start_equity is not None:
         last_day_reset_date = today
       if last_rebalance_date != today and _in_rebalance_window() and not panic_today:
-        logger.info("Авторебаланс по расписанию: запуск (дата %s)", today)
+        logger.info(
+          "Авторебаланс по расписанию: запуск (дата %s, window_now=%s, server_now=%s)",
+          today,
+          wnow.isoformat(),
+          now.isoformat(),
+        )
         last_rebalance_date = today
         last_drift_rebalance = now
         try:
           await broker_get_cash_async()
         except Exception as e:
           inc_error()
+          logger.warning("Авторебаланс по расписанию: пропуск на сегодня (брокер не отвечает): %s", e)
           await send_alert(tg, f"⚠️ Ребаланс пропущен: брокер не отвечает ({e})", "rebalance_skip", force=True)
           continue
         try:
@@ -715,6 +794,7 @@ async def main() -> None:
           await send_alert(tg, f"🤖 Авторебаланс (по расписанию): {res}", "rebalance")
         except Exception as e:
           inc_error()
+          logger.exception("Авторебаланс по расписанию: ошибка: %s", e)
           await send_alert(tg, f"❌ Ошибка авторебаланса: {e}", "rebalance_error")
         continue
 
@@ -738,6 +818,7 @@ async def main() -> None:
                 await send_alert(tg, f"⚠️ Ребаланс пропущен: брокер не отвечает ({e})", "rebalance_skip", force=True)
               else:
                 last_drift_rebalance = now
+                logger.info("Ребаланс по дрейфу: запуск (дата %s, window_now=%s, drift_pct=%.2f)", today, wnow.isoformat(), drift_pct)
                 res = await on_rebalance()
                 await send_alert(tg, f"📈 Ребаланс по ситуации (дрейф >{drift_pct:.0%}): {res}", "rebalance")
           except Exception as e:
