@@ -690,6 +690,9 @@ class PortfolioManager:
     # поэтому учитываем их, чтобы вторая и следующие заявки не получали "Not enough balance".
     available_cash: float = self.broker.get_cash_balance(currency=base_currency)
 
+    if orders:
+      logger.info("execute_rebalance: заявок %d (%s), available_cash=%.2f %s", len(orders), ", ".join(o.ticker for o in orders), available_cash, base_currency)
+
     for o in orders:
       qty = o.quantity
       if o.direction == OrderDirection.ORDER_DIRECTION_BUY:
@@ -697,6 +700,7 @@ class PortfolioManager:
         price = o.execution_price
         max_qty = int(math.floor(available_cash * 0.95 / price / lot)) * lot
         if max_qty < lot:
+          logger.warning("Пропуск заявки %s: недостаточно кэша (доступно %.2f %s, минимум на 1 лот ≈ %.2f)", o.ticker, available_cash, base_currency, price * lot)
           continue
         qty = min(qty, max_qty)
       # Обновляем цену перед выставлением: лимит считаем от текущей цены.
