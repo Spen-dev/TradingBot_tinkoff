@@ -174,6 +174,7 @@ DASHBOARD_HTML = """
           </div>
           <div class="small" style="margin-top:6px;">Время работы: ${uptimeStr}</div>
           <div class="small" style="margin-top:4px; color:#6b7280;">Обновлено (МСК): ${status.updated_at ? new Date(status.updated_at).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow' }) : '—'}</div>
+          <div class="small" style="margin-top:2px; color:#4b5563;">Сервер: ${status.server_time_iso ? new Date(status.server_time_iso).toLocaleString('ru-RU') : '—'} · Окно ребаланса (${status.trading_timezone || 'локально'}): ${status.window_time_iso ? new Date(status.window_time_iso).toLocaleString('ru-RU') : '—'}</div>
         `;
 
         const tbody = document.querySelector('#portfolio-table tbody');
@@ -337,6 +338,23 @@ def _now_msk_iso() -> str:
     return datetime.now().isoformat()
 
 
+def _timezone_info(cfg: "AppConfig | None") -> tuple[str, str, str]:
+  """Возвращает (server_time_iso, trading_timezone, window_time_iso)."""
+  server_now = datetime.now()
+  server_iso = server_now.isoformat()
+  tz_name = ""
+  if cfg and getattr(getattr(cfg, "portfolio", None), "trading_timezone", None):
+    tz_name = (getattr(cfg.portfolio, "trading_timezone", "") or "").strip()
+  if not tz_name:
+    return server_iso, "", server_iso
+  try:
+    from zoneinfo import ZoneInfo
+    window_now = datetime.now(ZoneInfo(tz_name))
+    return server_iso, tz_name, window_now.isoformat()
+  except Exception:
+    return server_iso, tz_name, server_iso
+
+
 def _load_status_snapshot() -> Dict[str, Any] | None:
   """Снимок статуса из основного цикла (актуальные PnL и просадка)."""
   try:
@@ -404,6 +422,7 @@ async def _handle_api_status(
     rebalance_time = "10:00"
     if cfg and getattr(cfg.portfolio, "rebalance_time", None):
       rebalance_time = str(cfg.portfolio.rebalance_time).strip() or "10:00"
+    server_time_iso, trading_timezone, window_time_iso = _timezone_info(cfg)
     return {
       "version": version,
       "mode": mode,
@@ -418,9 +437,13 @@ async def _handle_api_status(
       "trading_allowed": trading_allowed,
       "updated_at": updated_at,
       "rebalance_time": rebalance_time,
+      "server_time_iso": server_time_iso,
+      "trading_timezone": trading_timezone,
+      "window_time_iso": window_time_iso,
     }
   except Exception as e:
     logger.debug("api_status: fatal error: %s", e)
+    server_time_iso, trading_timezone, window_time_iso = _timezone_info(cfg)
     return {
       "version": "0.1.0",
       "mode": "sandbox",
@@ -435,6 +458,9 @@ async def _handle_api_status(
       "trading_allowed": False,
       "updated_at": _now_msk_iso(),
       "rebalance_time": "10:00",
+      "server_time_iso": server_time_iso,
+      "trading_timezone": trading_timezone,
+      "window_time_iso": window_time_iso,
     }
 
 

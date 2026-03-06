@@ -686,13 +686,16 @@ class PortfolioManager:
         except Exception as e:
           logger.debug("Отмена старых заявок: %s", e)
 
+    # Доступный кэш для покупок: после каждой выставленной лимитной заявки брокер резервирует средства,
+    # поэтому учитываем их, чтобы вторая и следующие заявки не получали "Not enough balance".
+    available_cash: float = self.broker.get_cash_balance(currency=base_currency)
+
     for o in orders:
       qty = o.quantity
       if o.direction == OrderDirection.ORDER_DIRECTION_BUY:
-        cash = self.broker.get_cash_balance(currency=base_currency)
         lot = getattr(self.instruments_cfg.get(o.figi), "lot", 1) or 1
         price = o.execution_price
-        max_qty = int(math.floor(cash * 0.95 / price / lot)) * lot
+        max_qty = int(math.floor(available_cash * 0.95 / price / lot)) * lot
         if max_qty < lot:
           continue
         qty = min(qty, max_qty)
@@ -721,6 +724,8 @@ class PortfolioManager:
       limit_price = expected_price * (1 - limit_pct) if is_buy else expected_price * (1 + limit_pct)
       if dry_run:
         logger.info("DRY-RUN: %s %s qty=%d @ %.2f (limit %.2f)", o.ticker, "BUY" if is_buy else "SELL", qty, expected_price, limit_price)
+        if is_buy:
+          available_cash -= qty * limit_price
         trades.append({
           "order_id": "dry_run",
           "figi": o.figi,
@@ -776,6 +781,8 @@ class PortfolioManager:
           time.sleep(2 * (attempt + 1))
       if order_id is None:
         continue
+      if is_buy:
+        available_cash -= qty * limit_price
       direction_str = "BUY" if is_buy else "SELL"
       _audit_order("place", o.figi, o.ticker, direction_str, qty, limit_price, order_id)
       _save_last_trade(o.figi)
