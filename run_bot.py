@@ -156,6 +156,8 @@ async def main() -> None:
       if day_start_equity is None:
         day_start_equity = equity
       print(f"Робот запущен. Cash={cash:.2f} Equity={equity:.2f} Positions={npos}")
+      tz_name = (getattr(cfg.portfolio, "trading_timezone", None) or "").strip() or "локально"
+      logger.info("Часовые пояса: сервер=%s, окно ребаланса (%s)=%s", datetime.now().isoformat(), tz_name, _now_for_window().isoformat())
       nonlocal started
       started = True
       try:
@@ -699,6 +701,7 @@ async def main() -> None:
       if last_day_reset_date is None and day_start_equity is not None:
         last_day_reset_date = today
       if last_rebalance_date != today and _in_rebalance_window() and not panic_today:
+        logger.info("Авторебаланс по расписанию: запуск (дата %s)", today)
         last_rebalance_date = today
         last_drift_rebalance = now
         try:
