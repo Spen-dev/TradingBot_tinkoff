@@ -499,7 +499,8 @@ async def _handle_api_portfolio(broker: "TinkoffBroker | None", cfg: "AppConfig 
 
 async def _handle_api_equity() -> Dict[str, Any]:
   from .equity_history import load_equity_history
-  points = load_equity_history(limit=500)
+  # ~1 точка/мин → 3000 точек ≈ 2+ дня для графика по дням
+  points = load_equity_history(limit=3000)
   return {
     "points": [
       {"ts": p.ts, "equity": p.equity, "cash": p.cash, "positions": p.positions}
