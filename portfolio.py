@@ -745,15 +745,18 @@ class PortfolioManager:
         _save_last_trade(o.figi)
         continue
       order_id = None
+      executed_qty = 0
+      current_qty = qty
       for attempt in range(3):
         try:
           order_id = self.broker.place_order(
             figi=o.figi,
-            quantity=qty,
+            quantity=current_qty,
             direction=o.direction,
             order_type=OrderType.ORDER_TYPE_LIMIT,
             price=limit_price,
           )
+          executed_qty = current_qty
           break
         except Exception as e:
           err_str = str(e).lower()
@@ -775,7 +778,43 @@ class PortfolioManager:
               "balance",
             )
           ):
-            logger.warning("Пропуск заявки %s: недостаточно средств (%s)", o.ticker, e)
+            # Подробный лог по 30034/недостатку средств: сколько кэша видит бот и какой объём пытался выставить.
+            approx_cost = current_qty * limit_price
+            logger.warning(
+              "Пропуск/уменьшение заявки %s: недостаточно средств (%s) "
+              "[available_cash=%.2f %s, qty=%d, price=%.4f, limit=%.4f, cost≈%.2f]",
+              o.ticker,
+              e,
+              available_cash,
+              base_currency,
+              current_qty,
+              expected_price,
+              limit_price,
+              approx_cost,
+            )
+            # Пытаемся уменьшить объём: делим на 2, округляя до кратного лоту.
+            if current_qty > (lot if is_buy else 1):
+              next_qty = int(math.floor(current_qty / 2 / lot)) * lot if is_buy else max(1, current_qty // 2)
+            else:
+              next_qty = 0
+            if next_qty >= (lot if is_buy else 1) and next_qty < current_qty:
+              logger.warning(
+                "Пробуем уменьшить заявку %s до qty=%d (лот=%d) после ошибки недостатка средств.",
+                o.ticker,
+                next_qty,
+                lot if is_buy else 1,
+              )
+              current_qty = next_qty
+              order_id = None
+              continue
+            logger.warning(
+              "Даже минимальный объём по %s не проходит по балансу (available_cash=%.2f %s, lot=%d, limit_price=%.4f).",
+              o.ticker,
+              available_cash,
+              base_currency,
+              lot if is_buy else 1,
+              limit_price,
+            )
             order_id = None
             break
           logger.warning("place_order %s попытка %d/3: %s", o.ticker, attempt + 1, e)
@@ -783,14 +822,14 @@ class PortfolioManager:
             raise
           import time
           time.sleep(2 * (attempt + 1))
-      if order_id is None:
+      if order_id is None or executed_qty <= 0:
         continue
       if is_buy:
-        available_cash -= qty * limit_price
+        available_cash -= executed_qty * limit_price
       direction_str = "BUY" if is_buy else "SELL"
-      _audit_order("place", o.figi, o.ticker, direction_str, qty, limit_price, order_id)
+      _audit_order("place", o.figi, o.ticker, direction_str, executed_qty, limit_price, order_id)
       _save_last_trade(o.figi)
-      amount = qty * expected_price
+      amount = executed_qty * expected_price
       commission = amount * self.cfg.commission_rate
       try:
         from .metrics import observe_slippage_pct
@@ -810,7 +849,7 @@ class PortfolioManager:
         "figi": o.figi,
         "ticker": o.ticker,
         "direction": direction_str_ru,
-        "quantity": qty,
+        "quantity": executed_qty,
         "price": limit_price,
         "expected_price": expected_price,
         "amount": amount,
