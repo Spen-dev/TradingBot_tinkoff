@@ -287,8 +287,10 @@ async def main() -> None:
       inc_error()
       return "Ошибка при получении портфеля (см. логи)"
 
-  async def on_rebalance() -> str:
+  async def on_rebalance(source: str = "manual") -> str:
+    """source: 'manual' | 'schedule' | 'drift' — для логов."""
     nonlocal day_start_equity, last_trade_time, awaiting_real_confirm, real_trade_confirmed
+    logger.info("Ребаланс (%s): вызов", source)
     try:
       mode = getattr(cfg, "mode", "sandbox") or "sandbox"
       dry_run = getattr(cfg.portfolio, "dry_run", True)
@@ -348,7 +350,8 @@ async def main() -> None:
         planned_orders = []
         logger.debug("build_rebalance_orders failed: %s", e)
       logger.info(
-        "Ребаланс (ручной): planned_orders=%d, dry_run=%s, equity=%.2f, cash=%.2f, positions=%d",
+        "Ребаланс (%s): planned_orders=%d, dry_run=%s, equity=%.2f, cash=%.2f, positions=%d",
+        source,
         len(planned_orders),
         dry_run,
         equity,
@@ -358,6 +361,7 @@ async def main() -> None:
       # Исполнение ребаланса выносим в отдельный поток, чтобы не блокировать event loop.
       loop = asyncio.get_running_loop()
       trades = await loop.run_in_executor(None, lambda: pm.execute_rebalance(day_start_equity or 0))
+      logger.info("Ребаланс (%s): исполнение завершено, заявок=%d", source, len(trades) if trades else 0)
       if trades:
         dry_run = getattr(cfg.portfolio, "dry_run", False)
         last_trade_time = datetime.now()
@@ -814,7 +818,7 @@ async def main() -> None:
           await send_alert(tg, f"⚠️ Ребаланс пропущен: брокер не отвечает ({e})", "rebalance_skip", force=True)
           continue
         try:
-          res = await on_rebalance()
+          res = await on_rebalance("schedule")
           await send_alert(tg, f"🤖 Авторебаланс (по расписанию): {res}", "rebalance")
         except Exception as e:
           inc_error()
@@ -843,10 +847,11 @@ async def main() -> None:
               else:
                 last_drift_rebalance = now
                 logger.info("Ребаланс по дрейфу: запуск (дата %s, window_now=%s, drift_pct=%.2f)", today, wnow.isoformat(), drift_pct)
-                res = await on_rebalance()
+                res = await on_rebalance("drift")
                 await send_alert(tg, f"📈 Ребаланс по ситуации (дрейф >{drift_pct:.0%}): {res}", "rebalance")
           except Exception as e:
             inc_error()
+            logger.exception("Ребаланс по дрейфу: ошибка: %s", e)
             await send_alert(tg, f"❌ Ошибка ребаланса по дрейфу: {e}", "rebalance_error")
 
       # Время дайджеста — в той же зоне, что и окно ребаланса (trading_timezone), иначе на сервере в UTC не совпадёт с 18:00 МСК
