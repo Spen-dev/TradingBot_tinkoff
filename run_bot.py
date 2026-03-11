@@ -488,6 +488,7 @@ async def main() -> None:
         tg,
         f"📊 Дневной дайджест (ручной): портфель {equity:.2f} {cfg.portfolio.base_currency}, дневной PnL {st.daily_pnl:.2f}, просадка {dd:.1%}{pause_str}",
         "daily_digest_manual",
+        force=True,
       )
       return "Ручной дневной дайджест отправлен."
     except Exception as e:
