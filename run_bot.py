@@ -235,6 +235,7 @@ async def main() -> None:
         f"Песочница: {sandbox_str}",
         f"Эквити: {format_money(equity, cfg.portfolio.base_currency)}",
         f"Свободные средства: {format_money(cash, cfg.portfolio.base_currency)}",
+        f"База дня (equity на старте): {format_money(day_start_equity, cfg.portfolio.base_currency)}",
         f"Позиций: {npos}",
         f"Дневной результат: {format_money(st.daily_pnl, cfg.portfolio.base_currency)}",
         f"Просадка: {format_pct(drawdown * 100)}",
@@ -517,7 +518,10 @@ async def main() -> None:
     health_server = None
 
   async def auto_rebalance_scheduler():
-    """Ребаланс по расписанию, по дрейфу, дайджест, алерт «нет сделок», сброс дня, блокировка инструментов, недельный отчёт."""
+    """Ребаланс по расписанию, по дрейфу, дайджест, алерт «нет сделок», сброс дня, блокировка инструментов, недельный отчёт.
+
+    Любые ошибки внутри планировщика логируются, чтобы задача не умирала молча.
+    """
     nonlocal last_trade_time, day_start_equity, last_live_ping
     rebalance_time = getattr(cfg.portfolio, "rebalance_time", "10:00")
     try:
@@ -604,10 +608,11 @@ async def main() -> None:
       return (now_mins >= rt_mins + window_start) and (now_mins <= window_end)
 
     while True:
-      await asyncio.sleep(60)
-      now = datetime.now()
-      wnow = _now_for_window()
-      today = wnow.date()
+      try:
+        await asyncio.sleep(60)
+        now = datetime.now()
+        wnow = _now_for_window()
+        today = wnow.date()
 
       if last_started_state is None or bool(started) != last_started_state:
         last_started_state = bool(started)
@@ -750,8 +755,8 @@ async def main() -> None:
               abs_ret = abs(ret)
               if ret <= -market_panic_drop:
                 panic_today = True
-                # Глобальная пауза до конца дня
-                hours_left = max(1.0, 24 - now.hour)
+                # Глобальная пауза до конца дня (в зоне окна)
+                hours_left = max(1.0, 24 - wnow.hour)
                 risk.set_pause_until(hours_left)
                 await send_alert(tg, f"⏸ Kill-switch: индекс {market_index_figi} упал на {ret*100:.1f}%. Торговля приостановлена до конца дня.", "market_panic", force=True)
               if abs_ret <= vol_low:
@@ -805,7 +810,7 @@ async def main() -> None:
       elif market_vol_level == "high":
         effective_check_interval = min(check_interval, 15)
 
-      if on_drift and (now.minute % effective_check_interval == 0) and _in_rebalance_window() and not panic_today:
+      if on_drift and (wnow.minute % effective_check_interval == 0) and _in_rebalance_window() and not panic_today:
         if last_drift_rebalance and (now - last_drift_rebalance).total_seconds() < cooldown_min * 60:
           pass
         else:
@@ -825,14 +830,16 @@ async def main() -> None:
             inc_error()
             await send_alert(tg, f"❌ Ошибка ребаланса по дрейфу: {e}", "rebalance_error")
 
-      if now.hour == digest_h and now.minute == digest_m and last_digest_date != now.date():
-        last_digest_date = now.date()
+      # Время дайджеста — в той же зоне, что и окно ребаланса (trading_timezone), иначе на сервере в UTC не совпадёт с 18:00 МСК
+      if wnow.hour == digest_h and wnow.minute == digest_m and last_digest_date != today:
+        last_digest_date = today
         try:
           equity, cash, npos = compute_equity()
           st = risk.update_equity(equity, day_start)
           dd = (st.max_equity_seen - st.equity) / max(st.max_equity_seen, 1e-9)
           pause = risk.get_pause_until()
           pause_str = f", пауза до {pause}" if pause else ""
+          logger.info("Дневной дайджест: отправка (window_now=%s)", wnow.isoformat())
           await send_alert(tg, f"📊 Дневной дайджест: портфель {equity:.2f} {cfg.portfolio.base_currency}, дневной PnL {st.daily_pnl:.2f}, просадка {dd:.1%}{pause_str}", "daily_digest")
           # Алерты по порогам (раз в день)
           alert_dd = getattr(cfg.portfolio, "alert_drawdown_pct", 0.0) or 0.0
@@ -865,7 +872,8 @@ async def main() -> None:
         except Exception:
           pass
 
-      if now.weekday() == weekly_weekday and now.hour == wh and now.minute == wm and last_weekly_report_date != today:
+      # Время недельного отчёта — в зоне окна (trading_timezone), как и дайджест
+      if wnow.weekday() == weekly_weekday and wnow.hour == wh and wnow.minute == wm and last_weekly_report_date != today:
         last_weekly_report_date = today
         try:
           from tinkoff_bot.trade_history import get_trades, get_per_instrument_stats, get_strategy_stats
@@ -991,8 +999,8 @@ async def main() -> None:
           pass
 
       if auto_retrain_days > 0 and last_retrain_date is not None:
-        if (now.date() - last_retrain_date).days >= auto_retrain_days:
-          last_retrain_date = now.date()
+        if (today - last_retrain_date).days >= auto_retrain_days:
+          last_retrain_date = today
           try:
             from tinkoff_bot.self_learn import run_retrain
             from tinkoff_bot.trade_history import get_consecutive_losses
@@ -1024,13 +1032,13 @@ async def main() -> None:
             inc_error()
             await send_alert(tg, f"❌ Ошибка самообучения: {e}", "self_learn_error")
       elif auto_retrain_days > 0 and last_retrain_date is None:
-        last_retrain_date = now.date()
+        last_retrain_date = today
 
       # RL: обучение при старте (один раз) или по интервалу
       if rl_instruments:
         if rl_train_on_start and not rl_train_start_done:
           rl_train_start_done = True
-          last_rl_train_date = now.date()
+          last_rl_train_date = today
           rl_days = getattr(cfg.portfolio, "rl_train_days", 365) or 365
           rl_steps = getattr(cfg.portfolio, "rl_train_timesteps", 50_000) or 50_000
           base_dir = Path(__file__).resolve().parent
@@ -1056,9 +1064,9 @@ async def main() -> None:
             await send_alert(tg, f"❌ Ошибка RL обучения: {e}", "rl_train_error")
         elif rl_train_interval_days > 0:
           if last_rl_train_date is None:
-            last_rl_train_date = now.date()
-          elif (now.date() - last_rl_train_date).days >= rl_train_interval_days:
-            last_rl_train_date = now.date()
+            last_rl_train_date = today
+          elif (today - last_rl_train_date).days >= rl_train_interval_days:
+            last_rl_train_date = today
             rl_days = getattr(cfg.portfolio, "rl_train_days", 365) or 365
             rl_steps = getattr(cfg.portfolio, "rl_train_timesteps", 50_000) or 50_000
             base_dir = Path(__file__).resolve().parent
@@ -1082,6 +1090,16 @@ async def main() -> None:
             except Exception as e:
               inc_error()
               await send_alert(tg, f"❌ Ошибка RL обучения: {e}", "rl_train_error")
+
+      except Exception as e:
+        # Ловим любые неожиданные ошибки цикла планировщика, чтобы задача не умирала молча.
+        inc_error()
+        logger.exception("auto_rebalance_scheduler iteration error: %s", e)
+        try:
+          await send_alert(tg, f"❌ Ошибка в планировщике ребаланса: {e}", "rebalance_scheduler_error")
+        except Exception:
+          pass
+        await asyncio.sleep(60)
 
   scheduler_task = asyncio.create_task(auto_rebalance_scheduler())
 
