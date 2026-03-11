@@ -461,12 +461,22 @@ class PortfolioManager:
         pass
 
     # Режим защиты от ночных гэпов: не открывать новые позиции близко к закрытию для «гэповых» бумаг
+    # Сравниваем с временем в trading_timezone, иначе на сервере в UTC окно и «последние N минут» не совпадут с МСК
+    tz_name = (getattr(self.cfg, "trading_timezone", None) or "").strip()
+    if tz_name:
+      try:
+        from zoneinfo import ZoneInfo
+        now_window = datetime.now(ZoneInfo(tz_name))
+      except Exception:
+        now_window = now
+    else:
+      now_window = now
     gap_risk_enabled = getattr(self.cfg, "gap_risk_enabled", False)
     gap_min_pct = getattr(self.cfg, "gap_min_pct", 0.03) or 0.03
     gap_close_minutes = getattr(self.cfg, "gap_close_minutes", 60) or 60
     gap_risky: Dict[str, bool] = {}
     window_end_mins = getattr(self.cfg, "rebalance_window_end_minutes", 24 * 60)
-    now_mins = now.hour * 60 + now.minute
+    now_mins = now_window.hour * 60 + now_window.minute
     no_new_before_end = getattr(self.cfg, "no_new_orders_before_end_minutes", 0) or 0
     no_new_orders = no_new_before_end > 0 and (window_end_mins - now_mins <= no_new_before_end)
     near_close = gap_risk_enabled and (window_end_mins - now_mins <= gap_close_minutes)
@@ -524,7 +534,7 @@ class PortfolioManager:
               lot=getattr(cfg, "lot", 1) or 1,
             )
             strat = build_strategy(effective_strategy, effective_cfg, self.broker)
-            signal = strat.compute_signal(now)
+            signal = strat.compute_signal(now_window)
             strategy_used = str(effective_strategy) if isinstance(effective_strategy, str) else "combined"
             logger.debug("Signal %s: %s strength=%.2f", cfg.ticker, signal.side, signal.strength)
         except (ValueError, Exception) as e:
