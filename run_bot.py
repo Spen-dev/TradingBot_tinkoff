@@ -608,68 +608,64 @@ async def main() -> None:
       return (now_mins >= rt_mins + window_start) and (now_mins <= window_end)
 
     while True:
-      try:
-        await asyncio.sleep(60)
-        now = datetime.now()
-        wnow = _now_for_window()
-        today = wnow.date()
+      await asyncio.sleep(60)
+      now = datetime.now()
+      wnow = _now_for_window()
+      today = wnow.date()
 
-        if last_started_state is None or bool(started) != last_started_state:
-          last_started_state = bool(started)
-          logger.info("Планировщик: started=%s (server=%s window=%s %s)", started, now.isoformat(), wnow.isoformat(), tz_name or "local")
+      if last_started_state is None or bool(started) != last_started_state:
+        last_started_state = bool(started)
+        logger.info("Планировщик: started=%s (server=%s window=%s %s)", started, now.isoformat(), wnow.isoformat(), tz_name or "local")
 
-        in_window = _in_rebalance_window()
-        if (last_window_state is None) or (in_window != last_window_state) or (last_window_state_date != today):
-          last_window_state = in_window
-          last_window_state_date = today
-          if in_window:
-            logger.info(
-              "Окно ребаланса: ВХОД (%s), now=%s, окно=%s–%s, last_rebalance_date=%s, panic_today=%s",
-              tz_name or "локально",
-              wnow.isoformat(),
-              _mins_to_hhmm(window_start_mins),
-              _mins_to_hhmm(window_end_mins),
-              last_rebalance_date,
-              panic_today,
-            )
-            if panic_today:
-              logger.info("Авторебаланс по расписанию: пропуск (kill-switch сегодня активен)")
-            elif last_rebalance_date == today:
-              logger.info("Авторебаланс по расписанию: пропуск (уже выполнялся сегодня)")
-          else:
-            logger.info(
-              "Окно ребаланса: ВЫХОД (%s), now=%s, окно=%s–%s",
-              tz_name or "локально",
-              wnow.isoformat(),
-              _mins_to_hhmm(window_start_mins),
-              _mins_to_hhmm(window_end_mins),
-            )
+      in_window = _in_rebalance_window()
+      if (last_window_state is None) or (in_window != last_window_state) or (last_window_state_date != today):
+        last_window_state = in_window
+        last_window_state_date = today
+        if in_window:
+          logger.info(
+            "Окно ребаланса: ВХОД (%s), now=%s, окно=%s–%s, last_rebalance_date=%s, panic_today=%s",
+            tz_name or "локально",
+            wnow.isoformat(),
+            _mins_to_hhmm(window_start_mins),
+            _mins_to_hhmm(window_end_mins),
+            last_rebalance_date,
+            panic_today,
+          )
+          if panic_today:
+            logger.info("Авторебаланс по расписанию: пропуск (kill-switch сегодня активен)")
+          elif last_rebalance_date == today:
+            logger.info("Авторебаланс по расписанию: пропуск (уже выполнялся сегодня)")
+        else:
+          logger.info(
+            "Окно ребаланса: ВЫХОД (%s), now=%s, окно=%s–%s",
+            tz_name or "локально",
+            wnow.isoformat(),
+            _mins_to_hhmm(window_start_mins),
+            _mins_to_hhmm(window_end_mins),
+          )
 
-        if not started:
-          continue
+      if not started:
+        continue
         # Логирование equity и снимок статуса для дашборда (актуальные PnL и просадка)
+        from tinkoff_bot.equity_history import append_equity_point
+        eq, cs, npos = compute_equity()
+        append_equity_point(now, eq, cs, npos)
+        st = risk.update_equity(eq, day_start_equity or eq)
+        dd = (st.max_equity_seen - st.equity) / max(st.max_equity_seen, 1e-9) if st.max_equity_seen else 0.0
         try:
-          from tinkoff_bot.equity_history import append_equity_point
-          eq, cs, npos = compute_equity()
-          append_equity_point(now, eq, cs, npos)
-          st = risk.update_equity(eq, day_start_equity or eq)
-          dd = (st.max_equity_seen - st.equity) / max(st.max_equity_seen, 1e-9) if st.max_equity_seen else 0.0
-          try:
-            from zoneinfo import ZoneInfo
-            updated_at_msk = datetime.now(ZoneInfo("Europe/Moscow")).isoformat()
-          except Exception:
-            updated_at_msk = now.isoformat()
-          snapshot = {
-            "equity": eq, "cash": cs, "positions_count": npos,
-            "daily_pnl": st.daily_pnl, "drawdown_pct": round(dd * 100, 2),
-            "trading_allowed": risk.is_trading_allowed(st),
-            "updated_at": updated_at_msk,
-          }
-          _snap_dir = Path(__file__).resolve().parent / "data"
-          _snap_dir.mkdir(parents=True, exist_ok=True)
-          (_snap_dir / "status_snapshot.json").write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
-      except Exception:
-        pass
+          from zoneinfo import ZoneInfo
+          updated_at_msk = datetime.now(ZoneInfo("Europe/Moscow")).isoformat()
+        except Exception:
+          updated_at_msk = now.isoformat()
+        snapshot = {
+          "equity": eq, "cash": cs, "positions_count": npos,
+          "daily_pnl": st.daily_pnl, "drawdown_pct": round(dd * 100, 2),
+          "trading_allowed": risk.is_trading_allowed(st),
+          "updated_at": updated_at_msk,
+        }
+        _snap_dir = Path(__file__).resolve().parent / "data"
+        _snap_dir.mkdir(parents=True, exist_ok=True)
+        (_snap_dir / "status_snapshot.json").write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
       if auto_strategy_selection_on_start and not strategy_selection_start_done:
         strategy_selection_start_done = True
         try:
@@ -1090,16 +1086,6 @@ async def main() -> None:
             except Exception as e:
               inc_error()
               await send_alert(tg, f"❌ Ошибка RL обучения: {e}", "rl_train_error")
-
-      except Exception as e:
-        # Ловим любые неожиданные ошибки цикла планировщика, чтобы задача не умирала молча.
-        inc_error()
-        logger.exception("auto_rebalance_scheduler iteration error: %s", e)
-        try:
-          await send_alert(tg, f"❌ Ошибка в планировщике ребаланса: {e}", "rebalance_scheduler_error")
-        except Exception:
-          pass
-        await asyncio.sleep(60)
 
   scheduler_task = asyncio.create_task(auto_rebalance_scheduler())
 
