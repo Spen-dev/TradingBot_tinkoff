@@ -614,36 +614,36 @@ async def main() -> None:
         wnow = _now_for_window()
         today = wnow.date()
 
-      if last_started_state is None or bool(started) != last_started_state:
-        last_started_state = bool(started)
-        logger.info("Планировщик: started=%s (server=%s window=%s %s)", started, now.isoformat(), wnow.isoformat(), tz_name or "local")
+        if last_started_state is None or bool(started) != last_started_state:
+          last_started_state = bool(started)
+          logger.info("Планировщик: started=%s (server=%s window=%s %s)", started, now.isoformat(), wnow.isoformat(), tz_name or "local")
 
-      in_window = _in_rebalance_window()
-      if (last_window_state is None) or (in_window != last_window_state) or (last_window_state_date != today):
-        last_window_state = in_window
-        last_window_state_date = today
-        if in_window:
-          logger.info(
-            "Окно ребаланса: ВХОД (%s), now=%s, окно=%s–%s, last_rebalance_date=%s, panic_today=%s",
-            tz_name or "локально",
-            wnow.isoformat(),
-            _mins_to_hhmm(window_start_mins),
-            _mins_to_hhmm(window_end_mins),
-            last_rebalance_date,
-            panic_today,
-          )
-          if panic_today:
-            logger.info("Авторебаланс по расписанию: пропуск (kill-switch сегодня активен)")
-          elif last_rebalance_date == today:
-            logger.info("Авторебаланс по расписанию: пропуск (уже выполнялся сегодня)")
-        else:
-          logger.info(
-            "Окно ребаланса: ВЫХОД (%s), now=%s, окно=%s–%s",
-            tz_name or "локально",
-            wnow.isoformat(),
-            _mins_to_hhmm(window_start_mins),
-            _mins_to_hhmm(window_end_mins),
-          )
+        in_window = _in_rebalance_window()
+        if (last_window_state is None) or (in_window != last_window_state) or (last_window_state_date != today):
+          last_window_state = in_window
+          last_window_state_date = today
+          if in_window:
+            logger.info(
+              "Окно ребаланса: ВХОД (%s), now=%s, окно=%s–%s, last_rebalance_date=%s, panic_today=%s",
+              tz_name or "локально",
+              wnow.isoformat(),
+              _mins_to_hhmm(window_start_mins),
+              _mins_to_hhmm(window_end_mins),
+              last_rebalance_date,
+              panic_today,
+            )
+            if panic_today:
+              logger.info("Авторебаланс по расписанию: пропуск (kill-switch сегодня активен)")
+            elif last_rebalance_date == today:
+              logger.info("Авторебаланс по расписанию: пропуск (уже выполнялся сегодня)")
+          else:
+            logger.info(
+              "Окно ребаланса: ВЫХОД (%s), now=%s, окно=%s–%s",
+              tz_name or "локально",
+              wnow.isoformat(),
+              _mins_to_hhmm(window_start_mins),
+              _mins_to_hhmm(window_end_mins),
+            )
 
       if not started:
         continue
