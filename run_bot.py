@@ -474,6 +474,25 @@ async def main() -> None:
     except Exception:
       return ""
 
+  async def on_daily_digest_manual() -> str:
+    """Принудительная отправка дневного дайджеста по команде из Telegram."""
+    try:
+      equity, cash, npos = compute_equity()
+      st = risk.update_equity(equity, day_start)
+      dd = (st.max_equity_seen - st.equity) / max(st.max_equity_seen, 1e-9)
+      pause = risk.get_pause_until()
+      pause_str = f", пауза до {pause}" if pause else ""
+      logger.info("Дневной дайджест (ручной): отправка")
+      await send_alert(
+        tg,
+        f"📊 Дневной дайджест (ручной): портфель {equity:.2f} {cfg.portfolio.base_currency}, дневной PnL {st.daily_pnl:.2f}, просадка {dd:.1%}{pause_str}",
+        "daily_digest_manual",
+      )
+      return "Ручной дневной дайджест отправлен."
+    except Exception as e:
+      logger.warning("Дневной дайджест (ручной): %s", e)
+      return f"Ошибка при формировании дневного дайджеста: {e}"
+
   async def on_last_errors() -> str:
     """Последние строки из лога с ошибками (или последние 15 строк)."""
     try:
@@ -502,6 +521,7 @@ async def main() -> None:
     on_pause=on_pause,
     on_unpause=on_unpause,
     on_help_extra=on_help_extra,
+    on_daily_digest=on_daily_digest_manual,
     is_started=lambda: started,
     on_confirm=on_confirm_received,
     get_mode=lambda: getattr(cfg, "mode", "sandbox") or "sandbox",

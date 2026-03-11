@@ -53,6 +53,7 @@ class TelegramController:
     self._on_pause: Callable[[float], Awaitable[None]] | None = None
     self._on_unpause: Callable[[str], Awaitable[str]] | None = None
     self._on_help_extra: Callable[[], Awaitable[str]] | None = None
+    self._on_daily_digest: Callable[[], Awaitable[str]] | None = None
     self._is_started: Callable[[], bool] | None = None
     self._on_confirm: Callable[[str], Awaitable[str | None]] | None = None
     self._get_mode: Callable[[], str] | None = None
@@ -75,6 +76,7 @@ class TelegramController:
     on_pause: Callable[[float], Awaitable[None]] | None = None,
     on_unpause: Callable[[str], Awaitable[str]] | None = None,
     on_help_extra: Callable[[], Awaitable[str]] | None = None,
+    on_daily_digest: Callable[[], Awaitable[str]] | None = None,
     is_started: Callable[[], bool] | None = None,
     on_confirm: Callable[[str], Awaitable[str | None]] | None = None,
     get_mode: Callable[[], str] | None = None,
@@ -96,6 +98,7 @@ class TelegramController:
     self._on_pause = on_pause
     self._on_unpause = on_unpause
     self._on_help_extra = on_help_extra
+    self._on_daily_digest = on_daily_digest
     self._is_started = is_started
     self._on_confirm = on_confirm
     self._get_mode = get_mode
@@ -113,6 +116,7 @@ class TelegramController:
       "/unpause <тикер> — снять паузу по инструменту, например /unpause VTBR\n"
       "/last_errors — последние строки из лога (ошибки)\n"
       "/dashboard — ссылка на веб-дашборд\n"
+      "/daily_digest_now — принудительно отправить дневной дайджест\n"
       "/help — этот список команд\n\n"
       "Кнопки:\n"
       "🟢 Старт — запуск робота, то же что /start\n"
@@ -206,6 +210,16 @@ class TelegramController:
         text = await self._on_status()
       else:
         text = "Статус недоступен"
+      await self.answer_chunked(msg, text)
+
+    @self.dp.message(Command("daily_digest_now"))
+    async def cmd_daily_digest_now(msg: types.Message):
+      if msg.chat.id != self.admin_chat_id:
+        return
+      if self._on_daily_digest:
+        text = await self._on_daily_digest()
+      else:
+        text = "Команда дневного дайджеста не настроена."
       await self.answer_chunked(msg, text)
 
     @self.dp.message(lambda m: m.text and m.text.strip() == "📊 Статус")
