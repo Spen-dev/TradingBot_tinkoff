@@ -522,6 +522,7 @@ async def main() -> None:
 
     Любые ошибки внутри планировщика логируются, чтобы задача не умирала молча.
     """
+    logger.info("auto_rebalance_scheduler: задача запущена")
     nonlocal last_trade_time, day_start_equity, last_live_ping
     rebalance_time = getattr(cfg.portfolio, "rebalance_time", "10:00")
     try:
@@ -1088,6 +1089,7 @@ async def main() -> None:
               await send_alert(tg, f"❌ Ошибка RL обучения: {e}", "rl_train_error")
 
   scheduler_task = asyncio.create_task(auto_rebalance_scheduler())
+  logger.info("Планировщик: задача создана (scheduler_task)")
 
   async def watchdog():
     failures = 0
