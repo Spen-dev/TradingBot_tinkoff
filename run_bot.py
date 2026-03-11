@@ -645,10 +645,10 @@ async def main() -> None:
               _mins_to_hhmm(window_end_mins),
             )
 
-      if not started:
-        continue
-      # Логирование equity и снимок статуса для дашборда (актуальные PnL и просадка)
-      try:
+        if not started:
+          continue
+        # Логирование equity и снимок статуса для дашборда (актуальные PnL и просадка)
+        try:
         from tinkoff_bot.equity_history import append_equity_point
         eq, cs, npos = compute_equity()
         append_equity_point(now, eq, cs, npos)
