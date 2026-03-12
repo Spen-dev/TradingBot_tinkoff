@@ -94,6 +94,7 @@ portfolio:
   deepseek_cache_hours: 2.0  # кэш рекомендаций DeepSeek (часы), 0 = не кэшировать
   deepseek_history_days: 10  # дней истории в контексте для DeepSeek (доходность, волатильность)
   rebalance_decisions_log: true  # писать в data/logs/rebalance_decisions.log решения ребаланса
+  aggressive_rebalance: true
 
 risk:
   max_drawdown: 0.15           # Макс. допустимая просадка от пика (15%) — блокировка торговли

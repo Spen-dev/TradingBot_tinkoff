@@ -145,6 +145,7 @@ class PortfolioConfig:
   deepseek_cache_hours: float = 2.0  # кэш рекомендаций DeepSeek (часы), 0 = не кэшировать
   deepseek_history_days: int = 10  # дней истории (доходность, волатильность) в контексте для DeepSeek
   rebalance_decisions_log: bool = True  # писать в лог решения ребаланса (стратегия, сигнал, заявки)
+  aggressive_rebalance: bool = False  # максимально агрессивный ребаланс по весам (ослабить фильтры по сигналам/отклонению)
 
 
 @dataclass
@@ -258,6 +259,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     deepseek_cache_hours=p_raw.get("deepseek_cache_hours", 2.0),
     deepseek_history_days=p_raw.get("deepseek_history_days", 10),
     rebalance_decisions_log=p_raw.get("rebalance_decisions_log", True),
+    aggressive_rebalance=p_raw.get("aggressive_rebalance", False),
   )
   risk_raw = raw.get("risk", {})
   risk_raw.setdefault("pause_after_consecutive_losses", 0)
