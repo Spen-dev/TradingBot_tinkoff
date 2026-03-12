@@ -448,6 +448,7 @@ class PortfolioManager:
     signal_strength_mult = getattr(self.cfg, "signal_strength_mult", 0.2) or 0.2
     signal_strength_min = getattr(self.cfg, "signal_strength_min", 0.3) or 0.3
     max_overweight_pct = getattr(self.cfg, "max_overweight_without_signal_pct", 0.0) or 0.0
+    aggressive = getattr(self.cfg, "aggressive_rebalance", False)
     try:
       from .instrument_pause import is_paused as instrument_is_paused
     except Exception:
@@ -542,9 +543,9 @@ class PortfolioManager:
       min_strength = cfg.strategy_params.get("min_strength", 0.0)
       cooldown_days = cfg.strategy_params.get("cooldown_days", 0)
       if signal is not None and signal.side not in ("hold",):
-        if signal.strength < min_strength:
+        if not aggressive and signal.strength < min_strength:
           continue
-        if cooldown_days > 0 and figi in last_trades:
+        if not aggressive and cooldown_days > 0 and figi in last_trades:
           try:
             last_dt = datetime.fromisoformat(last_trades[figi])
             if (now - last_dt).days < cooldown_days:
@@ -598,17 +599,19 @@ class PortfolioManager:
           "current_rub": round(current_value, 0),
         })
       diff = target_value - current_value
-      if abs(diff) / max(equity, 1e-9) < 0.01:
+      min_diff_pct = 0.01
+      if aggressive:
+        # В агрессивном режиме реагируем даже на 0.5% от эквити.
+        min_diff_pct = 0.005
+      if abs(diff) / max(equity, 1e-9) < min_diff_pct:
+        # Отклонение меньше порога — игнорируем шум.
         continue
-      if signal is not None:
-        if diff > 0 and signal.side == "sell":
+      if not aggressive and diff < 0 and max_overweight_pct > 0:
+        # Лёгкий перевес допускаем даже без явного сигнала sell — не трогаем позицию,
+        # но при сильном перевесе даём ребалансу сократить до цели.
+        overweight_pct = (current_value - base_target) / max(equity, 1e-9)
+        if overweight_pct <= max_overweight_pct:
           continue
-        if diff < 0 and signal.side == "buy":
-          continue
-        if diff < 0 and signal.side != "sell" and max_overweight_pct > 0:
-          overweight_pct = (current_value - base_target) / max(equity, 1e-9)
-          if overweight_pct <= max_overweight_pct:
-            continue
       price = pos.current_price if pos else self.broker.get_last_price(figi)
       if price <= 0:
         continue
