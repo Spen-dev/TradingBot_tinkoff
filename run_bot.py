@@ -855,6 +855,12 @@ async def main() -> None:
             await send_alert(tg, f"❌ Ошибка ребаланса по дрейфу: {e}", "rebalance_error")
 
       # Время дайджеста — в той же зоне, что и окно ребаланса (trading_timezone), иначе на сервере в UTC не совпадёт с 18:00 МСК
+      if wnow.hour == digest_h and wnow.minute == digest_m:
+        will_send = last_digest_date != today
+        logger.info(
+          "Дневной дайджест: минута наступила wnow=%s started=%s last_digest_date=%s will_send=%s",
+          wnow.isoformat(), started, last_digest_date, will_send,
+        )
       if wnow.hour == digest_h and wnow.minute == digest_m and last_digest_date != today:
         last_digest_date = today
         try:
