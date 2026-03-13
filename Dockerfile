@@ -8,8 +8,9 @@ WORKDIR /app
 COPY . .
 
 # Torch CPU (без CUDA) — для RL в контейнере; затем tinkoff-invest из GitHub и сам проект.
-# tinkoff-investments сейчас в карантине на PyPI, поэтому ставим напрямую из репозитория.
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
+# tinkoff-investments сейчас в карантине на PyPI, поэтому ставим напрямую из репозитория; для этого нужен git.
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* && \
+    pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir "tinkoff-investments @ git+https://github.com/Tinkoff/invest-python.git" && \
     pip install --no-cache-dir -e .
 
