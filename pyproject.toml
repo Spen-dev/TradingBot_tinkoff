@@ -13,7 +13,6 @@ dependencies = [
   "pandas",
   "prometheus-client",
   "aiogram",
-  "tinkoff-investments",
   "gymnasium",
   "stable-baselines3",
 ]
