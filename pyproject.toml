@@ -16,7 +16,6 @@ dependencies = [
   "tinkoff-investments",
   "gymnasium",
   "stable-baselines3",
-  "openai",
 ]
 
 [project.optional-dependencies]
