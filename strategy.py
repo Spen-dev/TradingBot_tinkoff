@@ -118,8 +118,14 @@ class MomentumStrategy(BaseStrategy):
     return Signal(figi=self.instrument.figi, side="hold", strength=0.0)
 
 
-def _get_candles(instrument: InstrumentConfig, broker: TinkoffBroker, lookback_days: int = 60) -> Optional[pd.DataFrame]:
-  to_dt = datetime.now()
+def _get_candles(
+  instrument: InstrumentConfig,
+  broker: TinkoffBroker,
+  lookback_days: int = 60,
+  now: Optional[datetime] = None,
+) -> Optional[pd.DataFrame]:
+  """Свечи за lookback_days до now. now=None — текущее время (реальное); в бэктесте передавать время симуляции."""
+  to_dt = now or datetime.now()
   from_dt = to_dt - timedelta(days=lookback_days)
   try:
     df = broker.get_historical_candles(instrument.figi, from_dt, to_dt)
@@ -132,7 +138,7 @@ def _get_candles(instrument: InstrumentConfig, broker: TinkoffBroker, lookback_d
 class RSIStrategy(BaseStrategy):
   """RSI: перекупленность (sell) / перепроданность (buy)."""
   def compute_signal(self, now: datetime) -> Signal:
-    df = _get_candles(self.instrument, self.broker, 50)
+    df = _get_candles(self.instrument, self.broker, 50, now=now)
     if df is None:
       return Signal(figi=self.instrument.figi, side="hold", strength=0.0)
     period = self.instrument.strategy_params.get("period", 14)
@@ -168,7 +174,7 @@ class RSIStrategy(BaseStrategy):
 class MACrossoverStrategy(BaseStrategy):
   """Пересечение быстрой и медленной MA: fast выше slow -> buy, ниже -> sell."""
   def compute_signal(self, now: datetime) -> Signal:
-    df = _get_candles(self.instrument, self.broker, 60)
+    df = _get_candles(self.instrument, self.broker, 60, now=now)
     if df is None:
       return Signal(figi=self.instrument.figi, side="hold", strength=0.0)
     fast = self.instrument.strategy_params.get("fast_period", 10)
@@ -198,7 +204,7 @@ class MACrossoverStrategy(BaseStrategy):
 class BreakoutStrategy(BaseStrategy):
   """Цена вышла из диапазона (выше max или ниже min за lookback)."""
   def compute_signal(self, now: datetime) -> Signal:
-    df = _get_candles(self.instrument, self.broker, 60)
+    df = _get_candles(self.instrument, self.broker, 60, now=now)
     if df is None:
       return Signal(figi=self.instrument.figi, side="hold", strength=0.0)
     lookback = self.instrument.strategy_params.get("lookback", 20)
@@ -228,7 +234,7 @@ class BreakoutStrategy(BaseStrategy):
 class VolumeWeightedStrategy(BaseStrategy):
   """Сигнал только при объёме выше среднего (volume > volume_ma * mult). Подстраивает momentum."""
   def compute_signal(self, now: datetime) -> Signal:
-    df = _get_candles(self.instrument, self.broker, 50)
+    df = _get_candles(self.instrument, self.broker, 50, now=now)
     if df is None or "volume" not in df.columns:
       return Signal(figi=self.instrument.figi, side="hold", strength=0.0)
     vol_ma_period = self.instrument.strategy_params.get("volume_ma_period", 20)
@@ -257,7 +263,7 @@ class VolumeWeightedStrategy(BaseStrategy):
 class VolatilityRegimeStrategy(BaseStrategy):
   """При экстремальной волатильности (ATR) — hold; иначе можно делегировать подстратегии или ослаблять силу."""
   def compute_signal(self, now: datetime) -> Signal:
-    df = _get_candles(self.instrument, self.broker, 60)
+    df = _get_candles(self.instrument, self.broker, 60, now=now)
     if df is None:
       return Signal(figi=self.instrument.figi, side="hold", strength=0.0)
     atr_period = self.instrument.strategy_params.get("atr_period", 14)
@@ -301,7 +307,7 @@ class MultiTFStrategy(BaseStrategy):
   """
 
   def compute_signal(self, now: datetime) -> Signal:
-    df = _get_candles(self.instrument, self.broker, 120)
+    df = _get_candles(self.instrument, self.broker, 120, now=now)
     if df is None:
       return Signal(figi=self.instrument.figi, side="hold", strength=0.0)
     lookback = self.instrument.strategy_params.get("higher_lookback", 40)
@@ -375,7 +381,7 @@ class AdaptiveStrategy(BaseStrategy):
   CANDIDATES = ("momentum", "mean_reversion", "breakout", "rsi")
 
   def compute_signal(self, now: datetime) -> Signal:
-    df = _get_candles(self.instrument, self.broker, 60)
+    df = _get_candles(self.instrument, self.broker, 60, now=now)
     if df is None or len(df) < 25:
       try:
         return _build_one("momentum", self.instrument, self.broker).compute_signal(now)
@@ -439,7 +445,7 @@ class RLStrategy(BaseStrategy):
         logger.debug("RL: не удалось загрузить модель %s: %s", path, e)
 
   def compute_signal(self, now: datetime) -> Signal:
-    df = _get_candles(self.instrument, self.broker, 60)
+    df = _get_candles(self.instrument, self.broker, 60, now=now)
     if df is None or len(df) < 50:
       return Signal(figi=self.instrument.figi, side="hold", strength=0.0)
     obs = obs_from_candles(df, window=50)

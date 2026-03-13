@@ -505,6 +505,18 @@ def tune_instrument_params(
 
     recurse(keys_to_tune, 0, {})
 
+  # Для RL с моделью перебор по threshold не меняет сигналы; если ничего не подобрали — примем текущие параметры при хотя бы одной сделке
+  if strategy_type == "rl" and not best_params:
+    try:
+      current_params = dict(instrument.strategy_params or {})
+      _, _, combined, nt = score_params(current_params)
+      if nt >= 1 and combined > -1e9:
+        best_params = current_params
+        best_score = combined
+        logger.info("Самообучение %s (rl): приняты текущие параметры, nt=%d score=%.4f", instrument.ticker, nt, combined)
+    except Exception as e:
+      logger.debug("RL fallback для %s: %s", instrument.ticker, e)
+
   if best_params and regime:
     best_params["_volatility_regime"] = regime
   logger.info(
@@ -547,6 +559,8 @@ def run_retrain(
     try:
       eff = learned.get(inst.figi, {}).get("strategy", inst.strategy)
       eff_strategy = eff if isinstance(eff, str) else (eff[0] if isinstance(eff, list) and eff else "adaptive")
+      # Для RL с моделью перебор по threshold не меняет сигналы; требуем минимум 2 сделки, иначе всегда «параметры не подобраны»
+      effective_min_trades = 2 if eff_strategy == "rl" else min_trades
       inst_for_tune = InstrumentConfig(
         figi=inst.figi, ticker=inst.ticker, strategy=eff_strategy,
         target_weight=inst.target_weight, strategy_params=dict(inst.strategy_params or {}),
@@ -558,7 +572,7 @@ def run_retrain(
         commission_rate=commission_rate,
         train_ratio=train_ratio,
         use_sharpe=use_sharpe,
-        min_trades=min_trades,
+        min_trades=effective_min_trades,
         optuna_trials=optuna_trials,
         atr_period=atr_period,
       )
