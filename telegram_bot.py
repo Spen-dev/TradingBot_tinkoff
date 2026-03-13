@@ -103,6 +103,41 @@ class TelegramController:
     self._on_confirm = on_confirm
     self._get_mode = get_mode
 
+  def _dashboard_reply_markup(self):
+    if not self._dashboard_url:
+      return None
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+      [types.InlineKeyboardButton(text="Открыть дашборд", url=self._dashboard_url)],
+    ])
+
+  def _dashboard_message(self) -> tuple[str, types.InlineKeyboardMarkup | None, bool]:
+    """Возвращает (текст, reply_markup или None, use_html)."""
+    if not self._dashboard_url:
+      return (
+        "Ссылка на дашборд не настроена.\n"
+        "На сервере в config.yaml в секции web: добавьте:\n"
+        "  dashboard_url: \"http://IP:8000/dashboard\"\n"
+        "Или в .env задайте: DASHBOARD_URL=http://IP:8000/dashboard\n"
+        "После этого перезапустите бота."
+      ), None, False
+    text = (
+      f"{self._dashboard_url}\n\n"
+      "Нажмите на ссылку выше или на кнопку ниже. Если не открывается — скопируйте ссылку в браузер."
+    )
+    return text, self._dashboard_reply_markup(), False
+
+  async def _send_dashboard(self, msg: types.Message) -> None:
+    """Отправить сообщение со ссылкой на дашборд (с fallback при ошибке)."""
+    text, markup, use_html = self._dashboard_message()
+    try:
+      await msg.answer(text, reply_markup=markup, parse_mode="HTML" if use_html else None)
+    except Exception as e:
+      _log.exception("Ошибка отправки дашборда: %s", e)
+      try:
+        await msg.answer(self._dashboard_url or "Ссылка не настроена (web.dashboard_url или DASHBOARD_URL).")
+      except Exception:
+        pass
+
   def _register_handlers(self) -> None:
     HELP_TEXT = (
       "📌 Команды бота:\n\n"
@@ -251,42 +286,6 @@ class TelegramController:
       else:
         text = "Портфель недоступен"
       await self.answer_chunked(msg, text)
-
-    def _dashboard_reply_markup(self):
-      if not self._dashboard_url:
-        return None
-      return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="Открыть дашборд", url=self._dashboard_url)],
-      ])
-
-    def _dashboard_message(self) -> tuple[str, types.InlineKeyboardMarkup | None, bool]:
-      """Возвращает (текст, reply_markup или None, use_html)."""
-      if not self._dashboard_url:
-        return (
-          "Ссылка на дашборд не настроена.\n"
-          "На сервере в config.yaml в секции web: добавьте:\n"
-          "  dashboard_url: \"http://IP:8000/dashboard\"\n"
-          "Или в .env задайте: DASHBOARD_URL=http://IP:8000/dashboard\n"
-          "После этого перезапустите бота."
-        ), None, False
-      # Ссылка отдельной строкой — Telegram подчёркивает и делает кликабельной; плюс кнопка под сообщением
-      text = (
-        f"{self._dashboard_url}\n\n"
-        "Нажмите на ссылку выше или на кнопку ниже. Если не открывается — скопируйте ссылку в браузер."
-      )
-      return text, self._dashboard_reply_markup(), False
-
-    async def _send_dashboard(self, msg: types.Message) -> None:
-      """Отправить сообщение со ссылкой на дашборд (с fallback при ошибке)."""
-      text, markup, use_html = self._dashboard_message()
-      try:
-        await msg.answer(text, reply_markup=markup, parse_mode="HTML" if use_html else None)
-      except Exception as e:
-        _log.exception("Ошибка отправки дашборда: %s", e)
-        try:
-          await msg.answer(self._dashboard_url or "Ссылка не настроена (web.dashboard_url или DASHBOARD_URL).")
-        except Exception:
-          pass
 
     @self.dp.message(Command("dashboard"))
     async def cmd_dashboard(msg: types.Message):
