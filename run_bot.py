@@ -701,6 +701,139 @@ async def main() -> None:
             _mins_to_hhmm(window_end_mins),
           )
 
+      # Дневной дайджест и недельный отчёт отправляем независимо от started, чтобы приходили даже при выключенной торговле
+      day_start_for_digest = day_start_equity or 0.0
+      if wnow.hour == digest_h and wnow.minute == digest_m and last_digest_date != today:
+        last_digest_date = today
+        try:
+          equity, cash, npos = compute_equity()
+          st = risk.update_equity(equity, day_start_for_digest)
+          dd = (st.max_equity_seen - st.equity) / max(st.max_equity_seen, 1e-9)
+          pause = risk.get_pause_until()
+          pause_str = f", пауза до {pause}" if pause else ""
+          logger.info("Дневной дайджест: отправка (window_now=%s)", wnow.isoformat())
+          await send_alert(tg, f"📊 Дневной дайджест: портфель {equity:.2f} {cfg.portfolio.base_currency}, дневной PnL {st.daily_pnl:.2f}, просадка {dd:.1%}{pause_str}", "daily_digest")
+          alert_dd = getattr(cfg.portfolio, "alert_drawdown_pct", 0.0) or 0.0
+          alert_daily = getattr(cfg.portfolio, "alert_daily_loss_pct", 0.0) or 0.0
+          if alert_dd > 0 and dd >= alert_dd and last_alert_drawdown_date != today:
+            last_alert_drawdown_date = today
+            await send_alert(tg, f"⚠️ Просадка портфеля {dd:.1%} превысила порог {alert_dd:.1%}.", "alert_drawdown", force=True)
+          day_start_val = max(day_start_for_digest, 1e-9)
+          if alert_daily > 0 and st.daily_pnl < 0 and (-st.daily_pnl / day_start_val) >= alert_daily and last_alert_daily_loss_date != today:
+            last_alert_daily_loss_date = today
+            await send_alert(tg, f"⚠️ Дневной убыток {st.daily_pnl:.2f} ({-st.daily_pnl/day_start_val:.1%}) превысил порог {alert_daily:.1%}.", "alert_daily_loss", force=True)
+        except Exception as e:
+          logger.warning("Дневной дайджест: %s", e)
+      if wnow.weekday() == weekly_weekday and wnow.hour == wh and wnow.minute == wm and last_weekly_report_date != today:
+        last_weekly_report_date = today
+        try:
+          from tinkoff_bot.trade_history import get_trades, get_per_instrument_stats, get_strategy_stats
+          from tinkoff_bot.self_learn import _get_signals_for_df, _simulate_pnl_and_dd, _compute_sharpe
+          from tinkoff_bot.instrument_pause import is_paused as instrument_is_paused, set_pause_hours
+          equity, cash, npos = compute_equity()
+          week_ago_dt = now - timedelta(days=7)
+          week_ago = week_ago_dt.isoformat()
+          trades_week = [t for t in get_trades(limit=100) if t.ts >= week_ago]
+          stats = get_per_instrument_stats(broker.get_last_price, horizon_days=30, max_trades=300)
+          per_inst_lines: list[str] = []
+          winners = sorted(stats.items(), key=lambda kv: kv[1].get("pnl", 0.0), reverse=True)
+          losers = sorted(stats.items(), key=lambda kv: kv[1].get("pnl", 0.0))[:3]
+          for figi, s in winners[:3]:
+            per_inst_lines.append(
+              f"↑ {s.get('ticker', figi)}: результат {s['pnl']:.2f} RUB, сделок {s['trades']}, винрейт {s.get('win_rate', 0.0)*100:.0f}%"
+            )
+          for figi, s in losers:
+            if s.get("pnl", 0.0) >= 0:
+              continue
+            per_inst_lines.append(
+              f"↓ {s.get('ticker', figi)}: результат {s['pnl']:.2f} RUB, сделок {s['trades']}, винрейт {s.get('win_rate', 0.0)*100:.0f}%"
+            )
+          per_inst_text = "\n".join(per_inst_lines) if per_inst_lines else "нет достаточно сделок для оценки"
+          strat_stats = get_strategy_stats(broker.get_last_price, horizon_days=30)
+          strat_lines: list[str] = []
+          for name, s in sorted(strat_stats.items(), key=lambda kv: kv[1].get("pnl", 0.0), reverse=True)[:3]:
+            strat_lines.append(
+              f"↑ {name}: средний результат {s.get('avg_pnl', 0.0):.2f} RUB, сделок {s['trades']}, винрейт {s.get('win_rate', 0.0)*100:.0f}%"
+            )
+          for name, s in sorted(strat_stats.items(), key=lambda kv: kv[1].get("pnl", 0.0))[:3]:
+            if s.get("pnl", 0.0) >= 0:
+              continue
+            strat_lines.append(
+              f"↓ {name}: средний результат {s.get('avg_pnl', 0.0):.2f} RUB, сделок {s['trades']}, винрейт {s.get('win_rate', 0.0)*100:.0f}%"
+            )
+          strat_text = "\n".join(strat_lines) if strat_lines else "нет достаточно сделок для оценки стратегий"
+          bad_paused: list[str] = []
+          for figi, s in stats.items():
+            trades_n = s.get("trades", 0)
+            pnl_val = s.get("pnl", 0.0)
+            win_rate = s.get("win_rate", 0.0)
+            if trades_n >= 10 and pnl_val < 0 and win_rate < 0.45:
+              set_pause_hours(figi, 24 * 7)
+              bad_paused.append(s.get("ticker", figi))
+          paused_now = [i.ticker for i in cfg.instruments if instrument_is_paused(i.figi)]
+          pause_text = ", ".join(sorted(set(paused_now))) if paused_now else "нет"
+          risk_pause = risk.get_pause_until()
+          risk_text = risk_pause.strftime("%Y-%m-%d %H:%M") if risk_pause else "нет"
+          bt_days = 90
+          bt_to = now
+          bt_from = bt_to - timedelta(days=bt_days)
+          commission = getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003
+          rows = []
+          for inst in cfg.instruments:
+            try:
+              df = broker.get_historical_candles(inst.figi, bt_from, bt_to)
+            except Exception:
+              continue
+            if df is None or len(df) < 40:
+              continue
+            try:
+              signals = _get_signals_for_df(broker, inst, df, params_override={})
+              pnl_bt, max_dd, n_trades_bt, daily_returns = _simulate_pnl_and_dd(df, signals, commission_rate=commission)
+              sharpe = _compute_sharpe(daily_returns)
+              rows.append((inst.ticker, pnl_bt, max_dd, sharpe, n_trades_bt))
+            except Exception:
+              continue
+          rows.sort(key=lambda x: x[1], reverse=True)
+          bt_lines = []
+          for ticker, pnl_bt, max_dd, sharpe, n_trades_bt in rows[:4]:
+            bt_lines.append(
+              f"{ticker}: доходность {pnl_bt*100:.1f}%, макс. просадка {max_dd*100:.1f}%, коэфф. Шарпа {sharpe:.2f}, сделок {n_trades_bt}"
+            )
+          bt_text = "\n".join(bt_lines) if bt_lines else "нет достаточно данных для бэктеста"
+          rl_lines = []
+          for inst in rl_instruments:
+            try:
+              params = getattr(inst, "strategy_params", None) or {}
+              model_path = params.get("rl_model_path", f"data/rl_model_{inst.ticker}.zip")
+              meta_path = base_dir / Path(model_path).with_suffix(".json")
+              if meta_path.exists():
+                import json
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                dt_str = meta.get("date", "")[:10]
+                if len(dt_str) >= 10:
+                  from datetime import datetime as _dt
+                  d = _dt.fromisoformat(dt_str)
+                  dt_str = d.strftime("%d.%m.%Y")
+                days = meta.get("days", 0)
+                rl_lines.append(f"{inst.ticker}: {dt_str}, окно {days} дн.")
+            except Exception:
+              pass
+          rl_text = "\n".join(rl_lines) if rl_lines else "нет данных"
+          msg = (
+            f"📈 Недельный отчёт: портфель {equity:.2f} {cfg.portfolio.base_currency}, "
+            f"сделок за неделю: {len(trades_week)}, позиций: {npos}"
+            f"\n\n📊 Инструменты (оценка 30 дн.):\n{per_inst_text}"
+            f"\n\n📚 Стратегии (оценка 30 дн.):\n{strat_text}"
+            f"\n\n🤖 RL-модели:\n{rl_text}"
+            f"\n\n⏸ Пауза по инструментам: {pause_text}\n⏱ Пауза по риску до: {risk_text}"
+            f"\n\n🧪 Бэктест стратегий за {bt_days} дн. (оценка):\n{bt_text}"
+          )
+          if bad_paused:
+            msg += "\n\n⚠️ Автопауза включена для: " + ", ".join(sorted(set(bad_paused)))
+          await send_alert(tg, msg, "weekly_digest")
+        except Exception as e:
+          logger.warning("Недельный отчёт: %s", e)
+
       if not started:
         continue
       # Логирование equity и снимок статуса для дашборда (актуальные PnL и просадка)
@@ -884,36 +1017,12 @@ async def main() -> None:
             logger.exception("Ребаланс по дрейфу: ошибка: %s", e)
             await send_alert(tg, f"❌ Ошибка ребаланса по дрейфу: {e}", "rebalance_error")
 
-      # Время дайджеста — в той же зоне, что и окно ребаланса (trading_timezone), иначе на сервере в UTC не совпадёт с 18:00 МСК
+      # Дневной дайджест и недельный отчёт отправляются выше (до проверки started), чтобы приходить всегда
       if wnow.hour == digest_h and wnow.minute == digest_m:
-        will_send = last_digest_date != today
         logger.info(
-          "Дневной дайджест: минута наступила wnow=%s started=%s last_digest_date=%s will_send=%s",
-          wnow.isoformat(), started, last_digest_date, will_send,
+          "Дневной дайджест: минута наступила wnow=%s started=%s last_digest_date=%s",
+          wnow.isoformat(), started, last_digest_date,
         )
-      if wnow.hour == digest_h and wnow.minute == digest_m and last_digest_date != today:
-        last_digest_date = today
-        try:
-          equity, cash, npos = compute_equity()
-          st = risk.update_equity(equity, day_start)
-          dd = (st.max_equity_seen - st.equity) / max(st.max_equity_seen, 1e-9)
-          pause = risk.get_pause_until()
-          pause_str = f", пауза до {pause}" if pause else ""
-          logger.info("Дневной дайджест: отправка (window_now=%s)", wnow.isoformat())
-          await send_alert(tg, f"📊 Дневной дайджест: портфель {equity:.2f} {cfg.portfolio.base_currency}, дневной PnL {st.daily_pnl:.2f}, просадка {dd:.1%}{pause_str}", "daily_digest")
-          # Алерты по порогам (раз в день)
-          alert_dd = getattr(cfg.portfolio, "alert_drawdown_pct", 0.0) or 0.0
-          alert_daily = getattr(cfg.portfolio, "alert_daily_loss_pct", 0.0) or 0.0
-          if alert_dd > 0 and dd >= alert_dd and last_alert_drawdown_date != today:
-            last_alert_drawdown_date = today
-            await send_alert(tg, f"⚠️ Просадка портфеля {dd:.1%} превысила порог {alert_dd:.1%}.", "alert_drawdown", force=True)
-          day_start_val = max(day_start, 1e-9)
-          if alert_daily > 0 and st.daily_pnl < 0 and (-st.daily_pnl / day_start_val) >= alert_daily and last_alert_daily_loss_date != today:
-            last_alert_daily_loss_date = today
-            await send_alert(tg, f"⚠️ Дневной убыток {st.daily_pnl:.2f} ({-st.daily_pnl/day_start_val:.1%}) превысил порог {alert_daily:.1%}.", "alert_daily_loss", force=True)
-        except Exception as e:
-          logger.warning("Дневной дайджест: %s", e)
-
       if no_trades_hours > 0 and trading_enabled and last_trade_time is not None:
         if (now - last_trade_time).total_seconds() >= no_trades_hours * 3600:
           await send_alert(tg, f"⚠️ Нет сделок более {no_trades_hours} ч. Проверьте логи и доступ к брокеру.", "no_trades")
@@ -932,132 +1041,7 @@ async def main() -> None:
         except Exception:
           pass
 
-      # Время недельного отчёта — в зоне окна (trading_timezone), как и дайджест
-      if wnow.weekday() == weekly_weekday and wnow.hour == wh and wnow.minute == wm and last_weekly_report_date != today:
-        last_weekly_report_date = today
-        try:
-          from tinkoff_bot.trade_history import get_trades, get_per_instrument_stats, get_strategy_stats
-          from tinkoff_bot.self_learn import _get_signals_for_df, _simulate_pnl_and_dd, _compute_sharpe
-          from tinkoff_bot.instrument_pause import is_paused as instrument_is_paused, set_pause_hours
-
-          equity, cash, npos = compute_equity()
-          week_ago_dt = now - timedelta(days=7)
-          week_ago = week_ago_dt.isoformat()
-          trades_week = [t for t in get_trades(limit=100) if t.ts >= week_ago]
-
-          # Реальный PnL по инструментам за последние 30 дней (по оценке trade_history)
-          stats = get_per_instrument_stats(broker.get_last_price, horizon_days=30, max_trades=300)
-          per_inst_lines: list[str] = []
-          winners = sorted(stats.items(), key=lambda kv: kv[1].get("pnl", 0.0), reverse=True)
-          losers = sorted(stats.items(), key=lambda kv: kv[1].get("pnl", 0.0))[:3]
-          for figi, s in winners[:3]:
-            per_inst_lines.append(
-              f"↑ {s.get('ticker', figi)}: результат {s['pnl']:.2f} RUB, сделок {s['trades']}, винрейт {s.get('win_rate', 0.0)*100:.0f}%"
-            )
-          for figi, s in losers:
-            if s.get("pnl", 0.0) >= 0:
-              continue
-            per_inst_lines.append(
-              f"↓ {s.get('ticker', figi)}: результат {s['pnl']:.2f} RUB, сделок {s['trades']}, винрейт {s.get('win_rate', 0.0)*100:.0f}%"
-            )
-          per_inst_text = "\n".join(per_inst_lines) if per_inst_lines else "нет достаточно сделок для оценки"
-
-          # Статистика по стратегиям
-          strat_stats = get_strategy_stats(broker.get_last_price, horizon_days=30)
-          strat_lines: list[str] = []
-          for name, s in sorted(strat_stats.items(), key=lambda kv: kv[1].get("pnl", 0.0), reverse=True)[:3]:
-            strat_lines.append(
-              f"↑ {name}: средний результат {s.get('avg_pnl', 0.0):.2f} RUB, сделок {s['trades']}, винрейт {s.get('win_rate', 0.0)*100:.0f}%"
-            )
-          for name, s in sorted(strat_stats.items(), key=lambda kv: kv[1].get("pnl", 0.0))[:3]:
-            if s.get("pnl", 0.0) >= 0:
-              continue
-            strat_lines.append(
-              f"↓ {name}: средний результат {s.get('avg_pnl', 0.0):.2f} RUB, сделок {s['trades']}, винрейт {s.get('win_rate', 0.0)*100:.0f}%"
-            )
-          strat_text = "\n".join(strat_lines) if strat_lines else "нет достаточно сделок для оценки стратегий"
-
-          # Авто-пауза для сильно убыточных инструментов (самоотключение)
-          bad_paused: list[str] = []
-          for figi, s in stats.items():
-            trades_n = s.get("trades", 0)
-            pnl_val = s.get("pnl", 0.0)
-            win_rate = s.get("win_rate", 0.0)
-            if trades_n >= 10 and pnl_val < 0 and win_rate < 0.45:
-              set_pause_hours(figi, 24 * 7)  # пауза на неделю
-              bad_paused.append(s.get("ticker", figi))
-
-          # Текущие паузы по инструментам и по риску
-          paused_now = [i.ticker for i in cfg.instruments if instrument_is_paused(i.figi)]
-          pause_text = ", ".join(sorted(set(paused_now))) if paused_now else "нет"
-          risk_pause = risk.get_pause_until()
-          risk_text = risk_pause.strftime("%Y-%m-%d %H:%M") if risk_pause else "нет"
-
-          # Автобэктест стратегий по истории (окно 90 дней)
-          bt_days = 90
-          bt_to = now
-          bt_from = bt_to - timedelta(days=bt_days)
-          commission = getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003
-          rows = []
-          for inst in cfg.instruments:
-            try:
-              df = broker.get_historical_candles(inst.figi, bt_from, bt_to)
-            except Exception:
-              continue
-            if df is None or len(df) < 40:
-              continue
-            try:
-              signals = _get_signals_for_df(broker, inst, df, params_override={})
-              pnl_bt, max_dd, n_trades_bt, daily_returns = _simulate_pnl_and_dd(df, signals, commission_rate=commission)
-              sharpe = _compute_sharpe(daily_returns)
-              rows.append((inst.ticker, pnl_bt, max_dd, sharpe, n_trades_bt))
-            except Exception:
-              continue
-          rows.sort(key=lambda x: x[1], reverse=True)
-          bt_lines = []
-          for ticker, pnl_bt, max_dd, sharpe, n_trades_bt in rows[:4]:
-            bt_lines.append(
-              f"{ticker}: доходность {pnl_bt*100:.1f}%, макс. просадка {max_dd*100:.1f}%, коэфф. Шарпа {sharpe:.2f}, сделок {n_trades_bt}"
-            )
-          bt_text = "\n".join(bt_lines) if bt_lines else "нет достаточно данных для бэктеста"
-
-          # Версионирование RL-моделей: из JSON рядом с .zip
-          rl_lines = []
-          for inst in rl_instruments:
-            try:
-              params = getattr(inst, "strategy_params", None) or {}
-              model_path = params.get("rl_model_path", f"data/rl_model_{inst.ticker}.zip")
-              meta_path = base_dir / Path(model_path).with_suffix(".json")
-              if meta_path.exists():
-                import json
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                dt_str = meta.get("date", "")[:10]
-                if len(dt_str) >= 10:
-                  from datetime import datetime as _dt
-                  d = _dt.fromisoformat(dt_str)
-                  dt_str = d.strftime("%d.%m.%Y")
-                days = meta.get("days", 0)
-                rl_lines.append(f"{inst.ticker}: {dt_str}, окно {days} дн.")
-            except Exception:
-              pass
-          rl_text = "\n".join(rl_lines) if rl_lines else "нет данных"
-
-          msg = (
-            f"📈 Недельный отчёт: портфель {equity:.2f} {cfg.portfolio.base_currency}, "
-            f"сделок за неделю: {len(trades_week)}, позиций: {npos}"
-            f"\n\n📊 Инструменты (оценка 30 дн.):\n{per_inst_text}"
-            f"\n\n📚 Стратегии (оценка 30 дн.):\n{strat_text}"
-            f"\n\n🤖 RL-модели:\n{rl_text}"
-            f"\n\n⏸ Пауза по инструментам: {pause_text}\n⏱ Пауза по риску до: {risk_text}"
-            f"\n\n🧪 Бэктест стратегий за {bt_days} дн. (оценка):\n{bt_text}"
-          )
-          if bad_paused:
-            msg += "\n\n⚠️ Автопауза включена для: " + ", ".join(sorted(set(bad_paused)))
-
-          await send_alert(tg, msg, "weekly_digest")
-        except Exception:
-          pass
-
+      # Недельный отчёт отправляется выше (до проверки started)
       if auto_retrain_days > 0 and last_retrain_date is not None:
         if (today - last_retrain_date).days >= auto_retrain_days:
           last_retrain_date = today
