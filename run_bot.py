@@ -149,7 +149,7 @@ async def main() -> None:
 
         target_cash = float(os.getenv("SANDBOX_TARGET_CASH", "100000"))
         cash = broker.get_cash_balance(currency=cfg.portfolio.base_currency)
-        if cash < target_cash:
+        if target_cash > 0 and cash < target_cash:
           broker.set_sandbox_balance(target_cash - cash, currency=cfg.portfolio.base_currency)
 
       equity, cash, npos = compute_equity()
