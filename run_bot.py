@@ -1085,7 +1085,6 @@ async def main() -> None:
           last_rl_train_date = today
           rl_days = getattr(cfg.portfolio, "rl_train_days", 365) or 365
           rl_steps = getattr(cfg.portfolio, "rl_train_timesteps", 50_000) or 50_000
-          base_dir = Path(__file__).resolve().parent
           results = []
           try:
             from tinkoff_bot.train_rl import run_rl_train
@@ -1113,7 +1112,6 @@ async def main() -> None:
             last_rl_train_date = today
             rl_days = getattr(cfg.portfolio, "rl_train_days", 365) or 365
             rl_steps = getattr(cfg.portfolio, "rl_train_timesteps", 50_000) or 50_000
-            base_dir = Path(__file__).resolve().parent
             results = []
             try:
               from tinkoff_bot.train_rl import run_rl_train
