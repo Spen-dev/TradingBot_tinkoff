@@ -3,6 +3,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Тише логи при сборке: pip от root в контейнере — норма; без напоминания про новую версию pip.
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_ROOT_USER_ACTION=ignore \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Копируем проект (исключения в .dockerignore)
 COPY . .
