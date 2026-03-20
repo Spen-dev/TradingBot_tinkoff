@@ -4,7 +4,7 @@ from typing import Callable, Awaitable
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import MenuButtonWebApp, WebAppInfo
+from aiogram.types import MenuButtonDefault, MenuButtonWebApp, WebAppInfo
 
 from .config import TelegramConfig
 from .telegram_utils import split_message
@@ -458,12 +458,23 @@ class TelegramController:
     _log.info("Telegram polling запущен; ответы только в чате admin_chat_id=%s", self.admin_chat_id)
     if self._dashboard_url:
       _log.info("Дашборд: ссылка задана, кнопка «Дашборд» будет присылать URL")
-      try:
-        await self.bot.set_chat_menu_button(
-          menu_button=MenuButtonWebApp(text="📈 Дашборд", web_app=WebAppInfo(url=self._dashboard_url)),
+      # MenuButtonWebApp в Telegram принимает только HTTPS; для http — оставляем обычное меню и /dashboard.
+      if self._dashboard_url.lower().startswith("https://"):
+        try:
+          await self.bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(text="📈 Дашборд", web_app=WebAppInfo(url=self._dashboard_url)),
+          )
+        except Exception as e:
+          _log.warning("Не удалось установить кнопку меню дашборда: %s", e)
+      else:
+        try:
+          await self.bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+        except Exception as e:
+          _log.debug("Меню: сброс на стандартное не удался: %s", e)
+        _log.info(
+          "Дашборд: пункт меню Web App только для HTTPS; текущий URL — обычная ссылка. "
+          "Открывайте через /dashboard или кнопку «Открыть дашборд» в чате."
         )
-      except Exception as e:
-        _log.warning("Не удалось установить кнопку меню дашборда: %s (нужен HTTPS для Web App)", e)
     else:
       _log.warning("Дашборд: web.dashboard_url не задан — в config.yaml или .env (DASHBOARD_URL) укажите URL")
     poll_task = asyncio.create_task(self.dp.start_polling(self.bot))
