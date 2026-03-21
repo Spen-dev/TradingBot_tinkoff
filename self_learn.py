@@ -56,6 +56,15 @@ DEFAULT_GRID = {
   "slow_period": [25, 30, 35],
 }
 
+# Если сетка/Optuna и текущие params не дали ни одного приемлемого набора (часто при жёстком min_trades)
+_TUNING_FALLBACK_PRESETS: List[Dict[str, Any]] = [
+  {"strategy": "momentum", "lookback": 10, "threshold": 0.015, "trend_threshold": 0.025},
+  {"strategy": "momentum", "lookback": 15, "threshold": 0.02, "trend_threshold": 0.03},
+  {"strategy": "rsi", "period": 14, "overbought": 70, "oversold": 30},
+  {"strategy": "mean_reversion", "lookback": 20, "threshold": 0.03, "trend_threshold": 0.04},
+  {"strategy": "breakout", "lookback": 15, "threshold": 0.025, "trend_threshold": 0.035},
+]
+
 
 class _BrokerWithData:
   """Обёртка: get_historical_candles возвращает срез df до current_time."""
@@ -86,12 +95,13 @@ class _BrokerWithData:
 
 
 def _count_trades(signals: List[Signal]) -> int:
-  """Число смен позиции (покупка или продажа)."""
+  """Число торговых импульсов: смена сигнала на buy или sell (не занижать sell после buy)."""
   if len(signals) < 2:
     return 0
   n = 0
   for i in range(1, len(signals)):
-    if signals[i].side != signals[i - 1].side and signals[i].side != "hold":
+    a, b = signals[i - 1].side, signals[i].side
+    if a != b and b in ("buy", "sell"):
       n += 1
   return n
 
@@ -639,6 +649,28 @@ def tune_instrument_params(
         logger.info("Самообучение %s: приняты текущие параметры (fallback), nt_gate=%d", instrument.ticker, nt)
     except Exception as e:
       logger.debug("Fallback текущих параметров %s: %s", instrument.ticker, e)
+
+  # Пресеты: хотя бы nt>=1 на истории, чтобы не получать пустой best при «молчаливой» сетке/Optuna
+  if not best_params:
+    for preset in _TUNING_FALLBACK_PRESETS:
+      try:
+        _, _, combined, nt = score_params(preset)
+        if nt >= 1:
+          best_params = dict(preset)
+          best_score = combined
+          logger.info(
+            "Самообучение %s: принят пресет fallback %s, nt_gate=%d",
+            instrument.ticker, preset.get("strategy"), nt,
+          )
+          break
+      except Exception as e:
+        logger.debug("Пресет fallback %s для %s: %s", preset.get("strategy"), instrument.ticker, e)
+
+  if not best_params:
+    logger.warning(
+      "Самообучение %s: параметры не подобраны (свечей=%d, min_trades=%d, optuna_trials=%d)",
+      instrument.ticker, len(df), min_trades, optuna_trials,
+    )
 
   if best_params and regime:
     best_params["_volatility_regime"] = regime
