@@ -281,7 +281,8 @@ def run_strategy_selection(
     best_name: Optional[str] = None
     best_score = -1e9
     best_sharpe = 0.0
-    current_score = -1e9
+    # None = текущая стратегия в переборе, но в этом прогоне не получила оценку (мало сделок, ошибка, нет rec)
+    current_score: Optional[float] = None
     for strat_name in candidates:
       try:
         if strategy_diversity_max_share > 0:
@@ -336,8 +337,24 @@ def run_strategy_selection(
       except Exception as e:
         logger.debug("Стратегия %s для %s: %s", strat_name, inst.ticker, e)
         continue
+    # Текущая стратегия не в списке кандидатов (rl без файла, deepseek без ответа API,
+    # volume_weighted/index/… вне STRATEGY_CANDIDATES) — иначе current_score остаётся None
+    # и сравнение дало бы ложное переключение на любого «оценённого» кандидата.
+    if current_strategy not in candidates:
+      weight_by_strategy[current_strategy] = weight_by_strategy.get(current_strategy, 0) + tw
+      if current_strategy == "deepseek":
+        reason = "нет рекомендации DeepSeek для FIGI в этом прогоне"
+      elif current_strategy == "rl":
+        reason = "rl не в кандидатах (нет rl_model_path или файл модели не найден)"
+      else:
+        reason = "стратегия не входит в перебор кандидатов"
+      lines.append(f"  {inst.ticker}: {current_strategy} ({reason}, без смены)")
+      continue
     if best_name:
-      should_switch = best_name != current_strategy and (best_score - current_score) >= strategy_change_min_delta
+      # Если текущая в candidates, но не набрала score (min_trades, исключение, пустой rec):
+      # сравнивать с best_score, а не с -inf — иначе ложная смена стратегии.
+      base_current = current_score if current_score is not None else best_score
+      should_switch = best_name != current_strategy and (best_score - base_current) >= strategy_change_min_delta
       chosen = best_name if should_switch else current_strategy
       if should_switch:
         update_learned_params(inst.figi, {"strategy": best_name})
