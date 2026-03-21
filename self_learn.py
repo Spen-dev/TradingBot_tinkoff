@@ -12,10 +12,37 @@ from tinkoff.invest import CandleInterval
 
 from .broker import TinkoffBroker
 from .config import InstrumentConfig
-from .learned_params import update_learned_params, load_learned_params, save_learned_params
+from .learned_params import (
+  update_learned_params,
+  load_learned_params,
+  save_learned_params,
+  get_effective_params,
+)
 from .strategy import build_strategy, Signal
 
 logger = logging.getLogger(__name__)
+
+# Ключи из learned_params, которые не являются параметрами стратегии для build_strategy
+_LEARNED_META_KEYS = frozenset({
+  "strategy",
+  "strategy_trend",
+  "strategy_range",
+  "strategy_weak_trend",
+  "target_weight",
+  "retrain_info",
+  "params_trend",
+  "params_range",
+  "params_weak_trend",
+})
+
+
+def _strategy_params_only(merged_params: Dict[str, Any]) -> Dict[str, Any]:
+  """Убрать из слияния learned метаданные, иначе strategy=deepseek затрёт суррогат в бэктесте."""
+  out = dict(merged_params)
+  for k in _LEARNED_META_KEYS:
+    out.pop(k, None)
+  return out
+
 
 DEFAULT_GRID = {
   "lookback": [15, 20, 25, 30],
@@ -148,6 +175,66 @@ def _volatility_regime(df: pd.DataFrame, atr_period: int = 14) -> str:
   median_atr = np.median(atr_hist.values)
   median_atr_pct = (median_atr / close.iloc[-1] * 100) if close.iloc[-1] else 0
   return "high" if atr_pct > median_atr_pct * 1.1 else "low"
+
+
+def _tune_strategy_surrogate(
+  inst: InstrumentConfig,
+  eff_strategy: str,
+  eff_raw: Any,
+) -> Tuple[Any, bool]:
+  """
+  Стратегия для бэктеста в tune_instrument_params и флаг «не писать strategy в learned».
+
+  deepseek (и combined с deepseek) в бэктесте даёт только hold (заглушка) → 0 сделок и
+  «параметры не подобраны». Подбираем на суррогате (стратегия из конфига или adaptive),
+  поле strategy в learned не перезаписываем.
+
+  Без deepseek возвращаем исходный eff_raw (str или list), а не только первый элемент списка.
+  """
+  uses_deepseek = eff_strategy == "deepseek" or (
+    isinstance(eff_raw, list) and "deepseek" in eff_raw
+  )
+  if not uses_deepseek:
+    if isinstance(eff_raw, str):
+      return eff_raw, False
+    if isinstance(eff_raw, list):
+      return eff_raw, False
+    return eff_strategy, False
+  base = inst.strategy
+  if isinstance(base, list):
+    others = [x for x in base if x != "deepseek"]
+    if others:
+      return str(others[0]), True
+    return "adaptive", True
+  if isinstance(base, str) and base != "deepseek":
+    return base, True
+  return "adaptive", True
+
+
+def instrument_config_for_historical_signals(
+  inst: InstrumentConfig,
+  learned: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Tuple[InstrumentConfig, bool]:
+  """
+  Конфиг для _get_signals_for_df / бэктеста: учитывает learned и суррогат для deepseek.
+
+  Возвращает (instrument, used_surrogate). Без этого weekly-бэктест и run_backtest
+  давали 0 сделок при strategy=deepseek в learned.
+  """
+  learned = learned if learned is not None else load_learned_params()
+  eff_raw = learned.get(inst.figi, {}).get("strategy", inst.strategy)
+  eff_strategy = eff_raw if isinstance(eff_raw, str) else (eff_raw[0] if isinstance(eff_raw, list) and eff_raw else "adaptive")
+  tune_strategy, used_surrogate = _tune_strategy_surrogate(inst, eff_strategy, eff_raw)
+  params = _strategy_params_only(get_effective_params(inst, learned, None))
+  out = InstrumentConfig(
+    figi=inst.figi,
+    ticker=inst.ticker,
+    strategy=tune_strategy,
+    target_weight=inst.target_weight,
+    strategy_params=params,
+    lot=getattr(inst, "lot", 1) or 1,
+  )
+  return out, used_surrogate
 
 
 def _get_signals_for_df(
@@ -595,11 +682,13 @@ def run_retrain(
     try:
       eff = learned.get(inst.figi, {}).get("strategy", inst.strategy)
       eff_strategy = eff if isinstance(eff, str) else (eff[0] if isinstance(eff, list) and eff else "adaptive")
+      tune_strategy, strip_strategy_from_best = _tune_strategy_surrogate(inst, eff_strategy, eff)
       # Для RL сетка почти только threshold (сигналы часто те же); порог сделок мягче, иначе часто «параметры не подобраны»
       effective_min_trades = max(1, min(2, min_trades)) if eff_strategy == "rl" else min_trades
+      eff_params = _strategy_params_only(get_effective_params(inst, learned, None))
       inst_for_tune = InstrumentConfig(
-        figi=inst.figi, ticker=inst.ticker, strategy=eff_strategy,
-        target_weight=inst.target_weight, strategy_params=dict(inst.strategy_params or {}),
+        figi=inst.figi, ticker=inst.ticker, strategy=tune_strategy,
+        target_weight=inst.target_weight, strategy_params=eff_params,
         lot=getattr(inst, "lot", 1) or 1,
       )
       best = tune_instrument_params(
@@ -613,14 +702,45 @@ def run_retrain(
         atr_period=atr_period,
       )
       if tune_by_regime:
-        best_trend = tune_instrument_params(broker, inst, days=days, risk_penalty=effective_penalty, commission_rate=commission_rate, train_ratio=train_ratio, use_sharpe=use_sharpe, min_trades=min_trades, optuna_trials=0, atr_period=atr_period, regime_filter="trend")
-        best_range = tune_instrument_params(broker, inst, days=days, risk_penalty=effective_penalty, commission_rate=commission_rate, train_ratio=train_ratio, use_sharpe=use_sharpe, min_trades=min_trades, optuna_trials=0, atr_period=atr_period, regime_filter="range")
+        best_trend = tune_instrument_params(
+          broker, inst_for_tune, days=days, risk_penalty=effective_penalty, commission_rate=commission_rate,
+          train_ratio=train_ratio, use_sharpe=use_sharpe, min_trades=min_trades, optuna_trials=0,
+          atr_period=atr_period, regime_filter="trend",
+        )
+        best_range = tune_instrument_params(
+          broker, inst_for_tune, days=days, risk_penalty=effective_penalty, commission_rate=commission_rate,
+          train_ratio=train_ratio, use_sharpe=use_sharpe, min_trades=min_trades, optuna_trials=0,
+          atr_period=atr_period, regime_filter="range",
+        )
+        def _regime_strategy_key() -> Any:
+          if isinstance(eff_raw, str):
+            return eff_raw
+          if isinstance(eff_raw, list) and eff_raw:
+            return eff_raw[0]
+          return tune_strategy
+
         if best_trend:
-          update_learned_params(inst.figi, {"strategy_trend": best_trend.get("strategy", inst.strategy), "params_trend": {k: v for k, v in best_trend.items() if k != "_volatility_regime"}})
+          strategy_trend_val = _regime_strategy_key() if strip_strategy_from_best else best_trend.get("strategy", tune_strategy)
+          update_learned_params(inst.figi, {
+            "strategy_trend": strategy_trend_val,
+            "params_trend": {k: v for k, v in best_trend.items() if k != "_volatility_regime"},
+          })
         if best_range:
-          update_learned_params(inst.figi, {"strategy_range": best_range.get("strategy", inst.strategy), "params_range": {k: v for k, v in best_range.items() if k != "_volatility_regime"}})
+          strategy_range_val = _regime_strategy_key() if strip_strategy_from_best else best_range.get("strategy", tune_strategy)
+          update_learned_params(inst.figi, {
+            "strategy_range": strategy_range_val,
+            "params_range": {k: v for k, v in best_range.items() if k != "_volatility_regime"},
+          })
       if best:
-        # Сначала Sharpe на полном окне — нужен и для guard-rail, и для весов
+        to_save = dict(best)
+        if strip_strategy_from_best:
+          to_save.pop("strategy", None)
+        if not to_save:
+          lines.append(
+            f"  {inst.ticker}: deepseek — сетка не дала параметров кроме типа стратегии, learned не менялся"
+          )
+          continue
+        # Сначала Sharpe на полном окне — нужен и для guard-rail, и для весов (как у суррогата)
         rets: List[float] = []
         sharpe = 0.0
         try:
@@ -628,7 +748,7 @@ def run_retrain(
           from_dt = to_dt - timedelta(days=days)
           df = broker.get_historical_candles(inst.figi, from_dt, to_dt)
           if len(df) >= 20:
-            sigs = _get_signals_for_df(broker, inst, df, best)
+            sigs = _get_signals_for_df(broker, inst_for_tune, df, best)
             _, _, _, rets = _simulate_pnl_and_dd(df, sigs, commission_rate)
             sharpe = _compute_sharpe(rets)
         except Exception:
@@ -640,9 +760,14 @@ def run_retrain(
         if old_sharpe > 0 and sharpe < old_sharpe - sharpe_degradation_limit:
           lines.append(f"  {inst.ticker}: лучшие найденные параметры хуже старых (Sharpe≈{sharpe:.3f} < {old_sharpe:.3f}), пропущено")
           continue
-        update_learned_params(inst.figi, best)
-        results.append((inst, best, sharpe, rets))
-        lines.append(f"  {inst.ticker}: {best} (Sharpe≈{sharpe:.3f})")
+        update_learned_params(inst.figi, to_save)
+        results.append((inst, to_save, sharpe, rets))
+        if strip_strategy_from_best:
+          lines.append(
+            f"  {inst.ticker}: {to_save} (Sharpe≈{sharpe:.3f}, подбор по суррогату, strategy=deepseek сохранена)"
+          )
+        else:
+          lines.append(f"  {inst.ticker}: {to_save} (Sharpe≈{sharpe:.3f})")
         try:
           # Сохраняем краткую метаинформацию о последнем обучении в learned_params
           update_learned_params(inst.figi, {
