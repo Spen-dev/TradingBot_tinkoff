@@ -728,7 +728,13 @@ async def main() -> None:
         last_weekly_report_date = today
         try:
           from tinkoff_bot.trade_history import get_trades, get_per_instrument_stats, get_strategy_stats
-          from tinkoff_bot.self_learn import _get_signals_for_df, _simulate_pnl_and_dd, _compute_sharpe
+          from tinkoff_bot.learned_params import load_learned_params
+          from tinkoff_bot.self_learn import (
+            _get_signals_for_df,
+            _simulate_pnl_and_dd,
+            _compute_sharpe,
+            instrument_config_for_historical_signals,
+          )
           from tinkoff_bot.instrument_pause import is_paused as instrument_is_paused, set_pause_hours
           equity, cash, npos = compute_equity()
           week_ago_dt = now - timedelta(days=7)
@@ -778,6 +784,7 @@ async def main() -> None:
           bt_to = now
           bt_from = bt_to - timedelta(days=bt_days)
           commission = getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003
+          learned_bt = load_learned_params()
           rows = []
           for inst in cfg.instruments:
             try:
@@ -787,18 +794,22 @@ async def main() -> None:
             if df is None or len(df) < 40:
               continue
             try:
-              signals = _get_signals_for_df(broker, inst, df, params_override={})
+              inst_bt, bt_surrogate = instrument_config_for_historical_signals(inst, learned_bt)
+              signals = _get_signals_for_df(broker, inst_bt, df, params_override={})
               pnl_bt, max_dd, n_trades_bt, daily_returns = _simulate_pnl_and_dd(df, signals, commission_rate=commission)
               sharpe = _compute_sharpe(daily_returns)
-              rows.append((inst.ticker, pnl_bt, max_dd, sharpe, n_trades_bt))
+              rows.append((inst.ticker, pnl_bt, max_dd, sharpe, n_trades_bt, bt_surrogate))
             except Exception:
               continue
           rows.sort(key=lambda x: x[1], reverse=True)
           bt_lines = []
-          for ticker, pnl_bt, max_dd, sharpe, n_trades_bt in rows[:4]:
+          for ticker, pnl_bt, max_dd, sharpe, n_trades_bt, bt_surrogate in rows[:4]:
+            suf = "*" if bt_surrogate else ""
             bt_lines.append(
-              f"{ticker}: доходность {pnl_bt*100:.1f}%, макс. просадка {max_dd*100:.1f}%, коэфф. Шарпа {sharpe:.2f}, сделок {n_trades_bt}"
+              f"{ticker}{suf}: доходность {pnl_bt*100:.1f}%, макс. просадка {max_dd*100:.1f}%, коэфф. Шарпа {sharpe:.2f}, сделок {n_trades_bt}"
             )
+          if any(r[5] for r in rows[:4]):
+            bt_lines.append("* бэктест по суррогатной стратегии (deepseek в learned без API в отчёте)")
           bt_text = "\n".join(bt_lines) if bt_lines else "нет достаточно данных для бэктеста"
           rl_lines = []
           for inst in rl_instruments:

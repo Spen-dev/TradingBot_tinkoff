@@ -14,7 +14,13 @@ from datetime import datetime, timedelta
 
 from tinkoff_bot.config import load_config
 from tinkoff_bot.broker import TinkoffBroker
-from tinkoff_bot.self_learn import _get_signals_for_df, _simulate_pnl_and_dd, _compute_sharpe
+from tinkoff_bot.learned_params import load_learned_params
+from tinkoff_bot.self_learn import (
+  _get_signals_for_df,
+  _simulate_pnl_and_dd,
+  _compute_sharpe,
+  instrument_config_for_historical_signals,
+)
 
 
 def main() -> None:
@@ -33,6 +39,8 @@ def main() -> None:
 
   print(f"Окно бэктеста: {from_dt.date()} .. {to_dt.date()} ({args.days} дней)")
   print(f"Комиссия: {commission:.5f}")
+  learned = load_learned_params()
+  print("(учтён learned_params; deepseek → суррогат для симуляции)")
   print()
 
   rows = []
@@ -48,10 +56,11 @@ def main() -> None:
       print(f"{inst.ticker}: not enough candles ({0 if df is None else len(df)})")
       continue
     try:
-      signals = _get_signals_for_df(broker, inst, df, params_override={})
+      inst_bt, used_surrogate = instrument_config_for_historical_signals(inst, learned)
+      signals = _get_signals_for_df(broker, inst_bt, df, params_override={})
       pnl, max_dd, n_trades, daily_returns = _simulate_pnl_and_dd(df, signals, commission_rate=commission)
       sharpe = _compute_sharpe(daily_returns)
-      rows.append((inst.ticker, pnl, max_dd, sharpe, n_trades))
+      rows.append((inst.ticker, pnl, max_dd, sharpe, n_trades, used_surrogate))
     except Exception as e:
       print(f"{inst.ticker}: backtest error: {e}")
       continue
@@ -60,12 +69,13 @@ def main() -> None:
     print("No instruments could be backtested.")
     return
 
-  print("Тикер   Доходн. %   Макс. просадка %   Коэфф. Шарпа   Сделок")
-  print("-----   ---------   ---------------   -------------   ------")
-  for ticker, pnl, max_dd, sharpe, n_trades in rows:
+  print("Тикер   Доходн. %   Макс. просадка %   Коэфф. Шарпа   Сделок  Прим.")
+  print("-----   ---------   ---------------   -------------   ------  -----")
+  for ticker, pnl, max_dd, sharpe, n_trades, used_surrogate in rows:
     pnl_pct = pnl * 100
     dd_pct = max_dd * 100
-    print(f"{ticker:5}  {pnl_pct:9.2f}  {dd_pct:15.2f}  {sharpe:13.2f}  {n_trades:7d}")
+    note = "суррогат" if used_surrogate else ""
+    print(f"{ticker:5}  {pnl_pct:9.2f}  {dd_pct:15.2f}  {sharpe:13.2f}  {n_trades:7d}  {note}")
 
 
 if __name__ == "__main__":
