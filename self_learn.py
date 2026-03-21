@@ -426,7 +426,7 @@ def tune_instrument_params(
     keys_to_tune = ["lookback", "threshold"]
 
   best_params: Dict[str, Any] = {}
-  best_score: float = -1e9
+  best_score: float = float("-inf")
   tried = 0
 
   def score_params(params: Dict[str, Any]) -> Tuple[float, float, float, int]:
@@ -479,8 +479,12 @@ def tune_instrument_params(
       study = optuna.create_study(direction="minimize")
       study.optimize(objective, n_trials=optuna_trials, show_progress_bar=False)
       if study.best_params:
-        best_params = dict(study.best_params)
-        _, _, best_score, _ = score_params(best_params)
+        cand = dict(study.best_params)
+        _, _, cand_score, cand_nt = score_params(cand)
+        # Не застревать на «победителе» Optuna с нулём сделок / штрафном score — дать шанс сетке и RL-fallback
+        if cand_nt >= min_trades and cand_score > -1e8:
+          best_params = cand
+          best_score = cand_score
     except ImportError:
       logger.warning("Optuna не установлена, используется перебор по сетке")
       optuna_trials = 0
@@ -491,7 +495,7 @@ def tune_instrument_params(
       if idx >= len(keys):
         _, _, combined, nt = score_params(current)
         tried += 1
-        if combined > best_score and nt >= min_trades:
+        if nt >= min_trades and (not best_params or combined > best_score):
           best_score = combined
           best_params = dict(current)
         return
@@ -508,18 +512,29 @@ def tune_instrument_params(
 
     recurse(keys_to_tune, 0, {})
 
-  # Для RL с моделью перебор по threshold не меняет сигналы; если ничего не подобрали — примем текущие параметры при хотя бы одной сделке
+  # RL: если перебор пуст — текущие params при любой сделке на истории
   if strategy_type == "rl" and not best_params:
     try:
       current_params = dict(instrument.strategy_params or {})
       _, _, combined, nt = score_params(current_params)
-      # combined может быть -1e9 из-за жёсткого окна val; при наличии сделок на train всё равно сохраняем текущие params
       if nt >= 1:
         best_params = current_params
         best_score = combined
         logger.info("Самообучение %s (rl): приняты текущие параметры, nt_gate=%d score=%.4f", instrument.ticker, nt, combined)
     except Exception as e:
       logger.debug("RL fallback для %s: %s", instrument.ticker, e)
+
+  # Любая стратегия: если сетка/Optuna ничего не приняли — не терять текущий конфиг при активности на истории
+  if not best_params:
+    try:
+      current_params = dict(instrument.strategy_params or {})
+      _, _, combined, nt = score_params(current_params)
+      if nt >= 1:
+        best_params = current_params
+        best_score = combined
+        logger.info("Самообучение %s: приняты текущие параметры (fallback), nt_gate=%d", instrument.ticker, nt)
+    except Exception as e:
+      logger.debug("Fallback текущих параметров %s: %s", instrument.ticker, e)
 
   if best_params and regime:
     best_params["_volatility_regime"] = regime
@@ -588,16 +603,9 @@ def run_retrain(
         if best_range:
           update_learned_params(inst.figi, {"strategy_range": best_range.get("strategy", inst.strategy), "params_range": {k: v for k, v in best_range.items() if k != "_volatility_regime"}})
       if best:
-        # Guard-rail: не принимать параметры, если новый Sharpe значительно хуже старого
-        prev_info = (learned.get(inst.figi, {}) or {}).get("retrain_info") or {}
-        old_sharpe = float(prev_info.get("sharpe", 0.0) or 0.0)
-        sharpe_degradation_limit = 0.2  # допустимое ухудшение Sharpe
-        if old_sharpe > 0 and sharpe < old_sharpe - sharpe_degradation_limit:
-          lines.append(f"  {inst.ticker}: лучшие найденные параметры хуже старых (Sharpe≈{sharpe:.3f} < {old_sharpe:.3f}), пропущено")
-          continue
-        update_learned_params(inst.figi, best)
-        # Оценка для весов: симулируем PnL с лучшими параметрами за весь период
+        # Сначала Sharpe на полном окне — нужен и для guard-rail, и для весов
         rets: List[float] = []
+        sharpe = 0.0
         try:
           to_dt = datetime.now()
           from_dt = to_dt - timedelta(days=days)
@@ -606,10 +614,16 @@ def run_retrain(
             sigs = _get_signals_for_df(broker, inst, df, best)
             _, _, _, rets = _simulate_pnl_and_dd(df, sigs, commission_rate)
             sharpe = _compute_sharpe(rets)
-          else:
-            sharpe = 0.0
         except Exception:
           sharpe = 0.0
+        # Guard-rail: не принимать параметры, если новый Sharpe значительно хуже старого
+        prev_info = (learned.get(inst.figi, {}) or {}).get("retrain_info") or {}
+        old_sharpe = float(prev_info.get("sharpe", 0.0) or 0.0)
+        sharpe_degradation_limit = 0.2  # допустимое ухудшение Sharpe
+        if old_sharpe > 0 and sharpe < old_sharpe - sharpe_degradation_limit:
+          lines.append(f"  {inst.ticker}: лучшие найденные параметры хуже старых (Sharpe≈{sharpe:.3f} < {old_sharpe:.3f}), пропущено")
+          continue
+        update_learned_params(inst.figi, best)
         results.append((inst, best, sharpe, rets))
         lines.append(f"  {inst.ticker}: {best} (Sharpe≈{sharpe:.3f})")
         try:
