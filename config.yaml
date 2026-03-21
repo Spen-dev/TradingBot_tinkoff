@@ -26,7 +26,7 @@ portfolio:
   rebalance_check_interval_minutes: 10   # Чаще проверять дрейф (каждые 10 мин)
   rebalance_cooldown_minutes: 30         # Пауза между ребалансами по дрейфу (30 мин)
   rebalance_interval_hours: 0  # 0 = раз в день по rebalance_time; >0 = каждые N ч в окне
-  retrain_days: 60             # Глубина истории для переобучения (самообучение)
+  retrain_days: 100            # Глубина истории для переобучения (самообучение; больше — стабильнее подбор)
   auto_retrain_interval_days: 7   # Автопереобучение раз в N дней (0 = выкл)
   volatility_atr_period: 14    # Период ATR для волатильности
   watchdog_interval_seconds: 90  # Интервал проверки доступности брокера (сек)
@@ -42,7 +42,7 @@ portfolio:
   rl_train_walk_forward_ratio: 0.7  # Доля данных на обучение, остальное — валидация (0.5–0.9)
   self_learn_train_ratio: 0.7  # Доля выборки на обучение при самообучении
   self_learn_use_sharpe: true  # Оптимизировать по Шарпу (иначе по PnL)
-  self_learn_min_trades: 5     # Минимум сделок на валидации для учёта набора параметров
+  self_learn_min_trades: 3     # Мин. сделок (учёт max(train, val); меньше — мягче для RL/редких сделок)
   self_learn_risk_penalty: 0.5 # Штраф за просадку в метрике самообучения
   self_learn_optuna_trials: 30 # Число испытаний Optuna (0 = перебор по сетке)
   self_learn_optimize_weights: true  # Подбирать целевые веса инструментов при самообучении

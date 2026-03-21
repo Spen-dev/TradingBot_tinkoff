@@ -455,7 +455,10 @@ def tune_instrument_params(
           s_v = pnl_v - risk_penalty * dd_v
         combined_sum += 0.5 * s_t + 0.5 * s_v
       combined = combined_sum / len(val_slices) if val_slices else -1e9
-      return s_t, combined, combined, nt_v_total // max(len(val_slices), 1)
+      # Для порога min_trades в переборе: не только val (иначе при «тихом» хвосте nt=0 при живом train)
+      nt_v_avg = nt_v_total // max(len(val_slices), 1)
+      nt_gate = max(nt_t, nt_v_avg)
+      return s_t, combined, combined, nt_gate
     except Exception:
       return -1e9, -1e9, -1e9, 0
 
@@ -510,10 +513,11 @@ def tune_instrument_params(
     try:
       current_params = dict(instrument.strategy_params or {})
       _, _, combined, nt = score_params(current_params)
-      if nt >= 1 and combined > -1e9:
+      # combined может быть -1e9 из-за жёсткого окна val; при наличии сделок на train всё равно сохраняем текущие params
+      if nt >= 1:
         best_params = current_params
         best_score = combined
-        logger.info("Самообучение %s (rl): приняты текущие параметры, nt=%d score=%.4f", instrument.ticker, nt, combined)
+        logger.info("Самообучение %s (rl): приняты текущие параметры, nt_gate=%d score=%.4f", instrument.ticker, nt, combined)
     except Exception as e:
       logger.debug("RL fallback для %s: %s", instrument.ticker, e)
 
@@ -559,8 +563,8 @@ def run_retrain(
     try:
       eff = learned.get(inst.figi, {}).get("strategy", inst.strategy)
       eff_strategy = eff if isinstance(eff, str) else (eff[0] if isinstance(eff, list) and eff else "adaptive")
-      # Для RL с моделью перебор по threshold не меняет сигналы; требуем минимум 2 сделки, иначе всегда «параметры не подобраны»
-      effective_min_trades = 2 if eff_strategy == "rl" else min_trades
+      # Для RL сетка почти только threshold (сигналы часто те же); порог сделок мягче, иначе часто «параметры не подобраны»
+      effective_min_trades = max(1, min(2, min_trades)) if eff_strategy == "rl" else min_trades
       inst_for_tune = InstrumentConfig(
         figi=inst.figi, ticker=inst.ticker, strategy=eff_strategy,
         target_weight=inst.target_weight, strategy_params=dict(inst.strategy_params or {}),
