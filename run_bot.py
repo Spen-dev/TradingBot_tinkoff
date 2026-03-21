@@ -834,6 +834,35 @@ async def main() -> None:
         except Exception as e:
           logger.warning("Недельный отчёт: %s", e)
 
+      # RL при старте процесса (один раз): до проверки started — не ждать Telegram «Старт»
+      if rl_instruments and rl_train_on_start and not rl_train_start_done:
+        rl_train_start_done = True
+        last_rl_train_date = today
+        rl_days = getattr(cfg.portfolio, "rl_train_days", 365) or 365
+        rl_steps = getattr(cfg.portfolio, "rl_train_timesteps", 50_000) or 50_000
+        results = []
+        try:
+          from tinkoff_bot.train_rl import run_rl_train
+          loop = asyncio.get_event_loop()
+          for inv in rl_instruments:
+            out_path = base_dir / "data" / f"rl_model_{getattr(inv, 'ticker', inv.figi)}.zip"
+            comm = getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003
+            wf = getattr(cfg.portfolio, "rl_train_walk_forward_ratio", 0.7) or 0.7
+            res = await loop.run_in_executor(
+              None,
+              lambda i=inv, p=str(out_path): run_rl_train(
+                broker, i.figi, days=rl_days, out_path=p, timesteps=rl_steps, verbose=0,
+                commission_rate=comm, walk_forward_ratio=wf,
+              ),
+            )
+            results.append(res)
+          await send_alert(tg, "🧠 RL обучение (при старте): " + "; ".join(results), "rl_train", force=True)
+          logger.info("RL при старте процесса завершено: %s", "; ".join(results))
+        except Exception as e:
+          inc_error()
+          logger.exception("RL при старте процесса: %s", e)
+          await send_alert(tg, f"❌ Ошибка RL обучения: {e}", "rl_train_error", force=True)
+
       if not started:
         continue
       # Логирование equity и снимок статуса для дашборда (актуальные PnL и просадка)
@@ -1078,34 +1107,9 @@ async def main() -> None:
       elif auto_retrain_days > 0 and last_retrain_date is None:
         last_retrain_date = today
 
-      # RL: обучение при старте (один раз) или по интервалу
+      # RL: периодическое переобучение по интервалу (разовое при старте процесса — выше, до проверки started)
       if rl_instruments:
-        if rl_train_on_start and not rl_train_start_done:
-          rl_train_start_done = True
-          last_rl_train_date = today
-          rl_days = getattr(cfg.portfolio, "rl_train_days", 365) or 365
-          rl_steps = getattr(cfg.portfolio, "rl_train_timesteps", 50_000) or 50_000
-          results = []
-          try:
-            from tinkoff_bot.train_rl import run_rl_train
-            loop = asyncio.get_event_loop()
-            for inv in rl_instruments:
-              out_path = base_dir / "data" / f"rl_model_{getattr(inv, 'ticker', inv.figi)}.zip"
-              comm = getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003
-              wf = getattr(cfg.portfolio, "rl_train_walk_forward_ratio", 0.7) or 0.7
-              res = await loop.run_in_executor(
-                None,
-                lambda i=inv, p=str(out_path): run_rl_train(
-                  broker, i.figi, days=rl_days, out_path=p, timesteps=rl_steps, verbose=0,
-                  commission_rate=comm, walk_forward_ratio=wf,
-                ),
-              )
-              results.append(res)
-            await send_alert(tg, "🧠 RL обучение (при старте): " + "; ".join(results), "rl_train")
-          except Exception as e:
-            inc_error()
-            await send_alert(tg, f"❌ Ошибка RL обучения: {e}", "rl_train_error")
-        elif rl_train_interval_days > 0:
+        if rl_train_interval_days > 0:
           if last_rl_train_date is None:
             last_rl_train_date = today
           elif (today - last_rl_train_date).days >= rl_train_interval_days:
