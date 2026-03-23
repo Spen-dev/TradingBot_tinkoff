@@ -474,7 +474,13 @@ async def main() -> None:
       if hours > 0 or days > 0:
         parts.append(f"{hours} ч")
       parts.append(f"{minutes} мин")
-      return "⏱ Робот работает: " + " ".join(parts)
+      base = "⏱ Робот работает: " + " ".join(parts)
+      if not getattr(cfg.portfolio, "auto_rebalance_when_stopped", False):
+        base += (
+          "\n\n📌 Авторебаланс по времени — только после «Старт» в Telegram. "
+          "Чтобы работал сразу после перезапуска контейнера: `auto_rebalance_when_stopped: true` в portfolio."
+        )
+      return base
     except Exception:
       return ""
 
@@ -874,7 +880,8 @@ async def main() -> None:
           logger.exception("RL при старте процесса: %s", e)
           await send_alert(tg, f"❌ Ошибка RL обучения: {e}", "rl_train_error", force=True)
 
-      if not started:
+      # Без «Старт» весь блок ниже (ребаланс, дашборд-снимок, самообучение по расписанию…) не выполнялся.
+      if not started and not getattr(cfg.portfolio, "auto_rebalance_when_stopped", False):
         continue
       # Логирование equity и снимок статуса для дашборда (актуальные PnL и просадка)
       from tinkoff_bot.equity_history import append_equity_point

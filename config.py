@@ -73,6 +73,8 @@ class PortfolioConfig:
   rebalance_drift_pct: float = 0.05
   rebalance_check_interval_minutes: int = 30
   rebalance_cooldown_minutes: int = 60
+  # true = расписание/дрейф/прочий цикл планировщика без Telegram «Старт» (удобно после перезапуска Docker)
+  auto_rebalance_when_stopped: bool = False
   rebalance_interval_hours: float = 0.0  # 0 = раз в день по rebalance_time, >0 = каждые N часов в окне
   retrain_days: int = 60
   auto_retrain_interval_days: int = 0
@@ -192,6 +194,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     rebalance_drift_pct=p_raw.get("rebalance_drift_pct", 0.05),
     rebalance_check_interval_minutes=p_raw.get("rebalance_check_interval_minutes", 30),
     rebalance_cooldown_minutes=p_raw.get("rebalance_cooldown_minutes", 60),
+    auto_rebalance_when_stopped=p_raw.get("auto_rebalance_when_stopped", False),
     rebalance_interval_hours=p_raw.get("rebalance_interval_hours", 0.0),
     retrain_days=p_raw.get("retrain_days", 60),
     auto_retrain_interval_days=p_raw.get("auto_retrain_interval_days", 0),
