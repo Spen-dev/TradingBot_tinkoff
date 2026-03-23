@@ -25,6 +25,8 @@ portfolio:
   rebalance_drift_pct: 0.03    # Более агрессивный порог дрейфа для ребаланса (3% для теста)
   rebalance_check_interval_minutes: 10   # Чаще проверять дрейф (каждые 10 мин)
   rebalance_cooldown_minutes: 30         # Пауза между ребалансами по дрейфу (30 мин)
+  # true = авторебаланс по расписанию/дрейфу без кнопки «Старт» в Telegram (после docker restart)
+  auto_rebalance_when_stopped: true
   rebalance_interval_hours: 0  # 0 = раз в день по rebalance_time; >0 = каждые N ч в окне
   retrain_days: 100            # Глубина истории для переобучения (самообучение; больше — стабильнее подбор)
   auto_retrain_interval_days: 7   # Автопереобучение раз в N дней (0 = выкл)
