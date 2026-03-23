@@ -675,6 +675,8 @@ async def main() -> None:
       now = datetime.now()
       wnow = _now_for_window()
       today = wnow.date()
+      # Минуты от полуночи в зоне окна (для расписания без «ровно эта минута» — иначе sleep(60) часто пропускает слот)
+      now_slot = wnow.hour * 60 + wnow.minute
 
       if last_started_state is None or bool(started) != last_started_state:
         last_started_state = bool(started)
@@ -707,18 +709,29 @@ async def main() -> None:
             _mins_to_hhmm(window_end_mins),
           )
 
-      # Дневной дайджест и недельный отчёт отправляем независимо от started, чтобы приходили даже при выключенной торговле
+      # Дневной дайджест и недельный отчёт — независимо от started.
+      # Не требуем minute == digest_m: из-за asyncio.sleep(60) фаза тика редко совпадает с :00 и дайджест «молча» не уходил днями.
       day_start_for_digest = day_start_equity or 0.0
-      if wnow.hour == digest_h and wnow.minute == digest_m and last_digest_date != today:
-        last_digest_date = today
+      digest_slot = digest_h * 60 + digest_m
+      if last_digest_date != today and now_slot >= digest_slot:
         try:
           equity, cash, npos = compute_equity()
           st = risk.update_equity(equity, day_start_for_digest)
           dd = (st.max_equity_seen - st.equity) / max(st.max_equity_seen, 1e-9)
           pause = risk.get_pause_until()
           pause_str = f", пауза до {pause}" if pause else ""
-          logger.info("Дневной дайджест: отправка (window_now=%s)", wnow.isoformat())
-          await send_alert(tg, f"📊 Дневной дайджест: портфель {equity:.2f} {cfg.portfolio.base_currency}, дневной PnL {st.daily_pnl:.2f}, просадка {dd:.1%}{pause_str}", "daily_digest")
+          logger.info(
+            "Дневной дайджест: отправка (window_now=%s, now_slot=%d >= %d)",
+            wnow.isoformat(), now_slot, digest_slot,
+          )
+          ok = await send_alert(
+            tg,
+            f"📊 Дневной дайджест: портфель {equity:.2f} {cfg.portfolio.base_currency}, дневной PnL {st.daily_pnl:.2f}, просадка {dd:.1%}{pause_str}",
+            "daily_digest",
+            force=True,
+          )
+          if ok:
+            last_digest_date = today
           alert_dd = getattr(cfg.portfolio, "alert_drawdown_pct", 0.0) or 0.0
           alert_daily = getattr(cfg.portfolio, "alert_daily_loss_pct", 0.0) or 0.0
           if alert_dd > 0 and dd >= alert_dd and last_alert_drawdown_date != today:
@@ -730,8 +743,9 @@ async def main() -> None:
             await send_alert(tg, f"⚠️ Дневной убыток {st.daily_pnl:.2f} ({-st.daily_pnl/day_start_val:.1%}) превысил порог {alert_daily:.1%}.", "alert_daily_loss", force=True)
         except Exception as e:
           logger.warning("Дневной дайджест: %s", e)
-      if wnow.weekday() == weekly_weekday and wnow.hour == wh and wnow.minute == wm and last_weekly_report_date != today:
-        last_weekly_report_date = today
+
+      weekly_slot = wh * 60 + wm
+      if wnow.weekday() == weekly_weekday and last_weekly_report_date != today and now_slot >= weekly_slot:
         try:
           from tinkoff_bot.trade_history import get_trades, get_per_instrument_stats, get_strategy_stats
           from tinkoff_bot.learned_params import load_learned_params
@@ -847,7 +861,9 @@ async def main() -> None:
           )
           if bad_paused:
             msg += "\n\n⚠️ Автопауза включена для: " + ", ".join(sorted(set(bad_paused)))
-          await send_alert(tg, msg, "weekly_digest")
+          w_ok = await send_alert(tg, msg, "weekly_digest", force=True)
+          if w_ok:
+            last_weekly_report_date = today
         except Exception as e:
           logger.warning("Недельный отчёт: %s", e)
 
@@ -1064,12 +1080,6 @@ async def main() -> None:
             logger.exception("Ребаланс по дрейфу: ошибка: %s", e)
             await send_alert(tg, f"❌ Ошибка ребаланса по дрейфу: {e}", "rebalance_error")
 
-      # Дневной дайджест и недельный отчёт отправляются выше (до проверки started), чтобы приходить всегда
-      if wnow.hour == digest_h and wnow.minute == digest_m:
-        logger.info(
-          "Дневной дайджест: минута наступила wnow=%s started=%s last_digest_date=%s",
-          wnow.isoformat(), started, last_digest_date,
-        )
       if no_trades_hours > 0 and trading_enabled and last_trade_time is not None:
         if (now - last_trade_time).total_seconds() >= no_trades_hours * 3600:
           await send_alert(tg, f"⚠️ Нет сделок более {no_trades_hours} ч. Проверьте логи и доступ к брокеру.", "no_trades")
