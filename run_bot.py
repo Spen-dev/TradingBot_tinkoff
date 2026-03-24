@@ -101,6 +101,33 @@ async def main() -> None:
     except Exception:
       return datetime.now()
 
+  def _rebalance_telegram_summary() -> str:
+    """Краткое описание авторебаланса для Telegram (/status, /help, старт)."""
+    rt = str(getattr(cfg.portfolio, "rebalance_time", "10:00") or "10:00").strip()
+    lo, hi = cfg.portfolio.rebalance_day_minutes_window()
+
+    def _mm(m: int) -> str:
+      m = int(m) % (24 * 60)
+      return f"{m // 60:02d}:{m % 60:02d}"
+
+    tz = (getattr(cfg.portfolio, "trading_timezone", None) or "").strip() or "время сервера"
+    auto = bool(getattr(cfg.portfolio, "auto_rebalance_when_stopped", False))
+    drift = bool(getattr(cfg.portfolio, "rebalance_on_drift", True))
+    try:
+      chk = max(1, int(getattr(cfg.portfolio, "rebalance_check_interval_minutes", 30) or 30))
+    except (TypeError, ValueError):
+      chk = 30
+    lines = [
+      f"📅 Авторебаланс: раз в день в окне {_mm(lo)}–{_mm(hi)} ({tz}), ориентир по времени {rt}.",
+      f"🔌 Без кнопки «Старт»: расписание и дрейф {'работают' if auto else 'не работают'} (portfolio.auto_rebalance_when_stopped).",
+    ]
+    if drift:
+      lines.append(f"📈 При сильном дрейфе весов — доп. ребаланс (проверка ~каждые {chk} мин внутри окна).")
+    else:
+      lines.append("📈 Ребаланс только по расписанию (дрейф в конфиге выключен).")
+    lines.append("💬 О каждом автозапуске придёт отдельное сообщение в этот чат.")
+    return "\n".join(lines)
+
   def compute_equity() -> tuple[float, float, int]:
     positions = broker.get_portfolio()
     cash = broker.get_cash_balance(currency=cfg.portfolio.base_currency)
@@ -165,7 +192,12 @@ async def main() -> None:
         append_equity_point(datetime.now(), equity, cash, npos)
       except Exception:
         pass
-      await send_alert(tg, f"🟢 Робот запущен. Портфель: {equity:.2f} {cfg.portfolio.base_currency}, позиций: {npos}", "start", force=True)
+      await send_alert(
+        tg,
+        f"🟢 Робот запущен. Портфель: {equity:.2f} {cfg.portfolio.base_currency}, позиций: {npos}\n\n{_rebalance_telegram_summary()}",
+        "start",
+        force=True,
+      )
     except Exception as e:
       inc_error()
       logger.exception("on_start: %s", e)
@@ -241,6 +273,8 @@ async def main() -> None:
         f"Просадка: {format_pct(drawdown * 100)}",
         f"Торговля разрешена: {allowed_str}",
         f"Время работы: {uptime_str}",
+        "",
+        _rebalance_telegram_summary(),
       ]
       return "\n".join(lines)
     except Exception:
@@ -468,12 +502,7 @@ async def main() -> None:
         parts.append(f"{hours} ч")
       parts.append(f"{minutes} мин")
       base = "⏱ Робот работает: " + " ".join(parts)
-      if not getattr(cfg.portfolio, "auto_rebalance_when_stopped", False):
-        base += (
-          "\n\n📌 Авторебаланс по времени — только после «Старт» в Telegram. "
-          "Чтобы работал сразу после перезапуска контейнера: `auto_rebalance_when_stopped: true` в portfolio."
-        )
-      return base
+      return f"{base}\n\n{_rebalance_telegram_summary()}"
     except Exception:
       return ""
 
