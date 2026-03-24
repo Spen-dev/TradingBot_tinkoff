@@ -783,11 +783,11 @@ async def main() -> None:
             continue
           try:
             res = await on_rebalance("schedule")
-            await send_alert(tg, f"🤖 Авторебаланс (по расписанию): {res}", "rebalance")
+            await send_alert(tg, f"🤖 Авторебаланс (по расписанию): {res}", "rebalance_schedule", force=True)
           except Exception as e:
             inc_error()
             logger.exception("Авторебаланс по расписанию: ошибка: %s", e)
-            await send_alert(tg, f"❌ Ошибка авторебаланса: {e}", "rebalance_error")
+            await send_alert(tg, f"❌ Ошибка авторебаланса: {e}", "rebalance_schedule_error", force=True)
             # День отмечаем, иначе при постоянной ошибке — алерт каждую минуту до конца окна.
           last_rebalance_date = today
           last_drift_rebalance = now
@@ -1095,11 +1095,16 @@ async def main() -> None:
                 last_drift_rebalance = now
                 logger.info("Ребаланс по дрейфу: запуск (дата %s, window_now=%s, drift_pct=%.2f)", today, wnow.isoformat(), drift_pct)
                 res = await on_rebalance("drift")
-                await send_alert(tg, f"📈 Ребаланс по ситуации (дрейф >{drift_pct:.0%}): {res}", "rebalance")
+                await send_alert(
+                  tg,
+                  f"📈 Ребаланс по дрейфу (дрейф >{drift_pct:.0%}): {res}",
+                  "rebalance_drift",
+                  force=True,
+                )
           except Exception as e:
             inc_error()
             logger.exception("Ребаланс по дрейфу: ошибка: %s", e)
-            await send_alert(tg, f"❌ Ошибка ребаланса по дрейфу: {e}", "rebalance_error")
+            await send_alert(tg, f"❌ Ошибка ребаланса по дрейфу: {e}", "rebalance_drift_error", force=True)
 
       if no_trades_hours > 0 and trading_enabled and last_trade_time is not None:
         if (now - last_trade_time).total_seconds() >= no_trades_hours * 3600:
