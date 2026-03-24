@@ -49,8 +49,10 @@ portfolio:
   self_learn_optuna_trials: 30 # Число испытаний Optuna (0 = перебор по сетке)
   self_learn_optimize_weights: true  # Подбирать целевые веса инструментов при самообучении
   self_learn_weight_cap: 0.4   # Максимальный целевой вес одного инструмента при оптимизации
-  rebalance_window_start_minutes: 30   # Начало торгового окна (мин от rebalance_time)
-  rebalance_window_end_minutes: 1090  # Конец окна (мин от полуночи; 1090 ≈ 18:10)
+  # Устарело: на окно не влияет. Начало окна = rebalance_time (например 10:00 — с 10:00 МСК).
+  rebalance_window_start_minutes: 0
+  # Конец окна — минуты от ПОЛУНОЧИ (1090 ≈ 18:10). Если раньше rebalance_time — бот расширит до 23:59 и залогирует предупреждение.
+  rebalance_window_end_minutes: 1090
   trading_timezone: "Europe/Moscow"    # Часовой пояс окна (пусто = время сервера)
   volume_filter_min_ratio: 0.0 # Мин. объём дня / скольз. среднее объёма (0 = не фильтровать)
   atr_percentile_days: 90      # Окно для перцентилей ATR (0 = не использовать)

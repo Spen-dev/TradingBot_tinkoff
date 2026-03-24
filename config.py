@@ -99,7 +99,7 @@ class PortfolioConfig:
   self_learn_optuna_trials: int = 0  # 0 = перебор по сетке, >0 = Optuna
   self_learn_optimize_weights: bool = False
   self_learn_weight_cap: float = 0.4
-  rebalance_window_start_minutes: int = 30
+  rebalance_window_start_minutes: int = 0  # устарело, на окно ребаланса не влияет
   rebalance_window_end_minutes: int = 1090
   trading_timezone: str = ""  # например Europe/Moscow; пусто = локальное время сервера
   volume_filter_min_ratio: float = 0.0
@@ -148,6 +148,33 @@ class PortfolioConfig:
   deepseek_history_days: int = 10  # дней истории (доходность, волатильность) в контексте для DeepSeek
   rebalance_decisions_log: bool = True  # писать в лог решения ребаланса (стратегия, сигнал, заявки)
   aggressive_rebalance: bool = False  # максимально агрессивный ребаланс по весам (ослабить фильтры по сигналам/отклонению)
+
+  def rebalance_day_minutes_window(self) -> tuple[int, int]:
+    """Минуты суток [lo, hi] включительно, когда разрешён ребаланс.
+
+    Начало: время rebalance_time (слот «в 10:00» — с 10:00, без сдвига).
+    Конец: rebalance_window_end_minutes (минуты от полуночи, см. yaml).
+
+    rebalance_window_start_minutes оставлен в конфиге для совместимости; на границы окна не влияет.
+
+    Если rebalance_time по минутам позже конца (часто при ~18:00 и end ~1090≈18:10),
+    конец переносится на 23:59 — иначе окно пустое и авторебаланс не срабатывает.
+    """
+    try:
+      rh, rm = map(int, str(self.rebalance_time).strip().split(":"))
+    except (ValueError, AttributeError):
+      rh, rm = 10, 0
+    rt_m = rh * 60 + rm
+    we = int(self.rebalance_window_end_minutes or 24 * 60)
+    if we >= 24 * 60:
+      return 0, 24 * 60 - 1
+    lo = rt_m
+    hi = we
+    if lo > hi:
+      hi = 24 * 60 - 1
+    lo = max(0, min(lo, 24 * 60 - 1))
+    hi = max(lo, min(hi, 24 * 60 - 1))
+    return lo, hi
 
 
 @dataclass
@@ -216,7 +243,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     self_learn_optuna_trials=p_raw.get("self_learn_optuna_trials", 0),
     self_learn_optimize_weights=p_raw.get("self_learn_optimize_weights", False),
     self_learn_weight_cap=p_raw.get("self_learn_weight_cap", 0.4),
-    rebalance_window_start_minutes=p_raw.get("rebalance_window_start_minutes", 30),
+    rebalance_window_start_minutes=p_raw.get("rebalance_window_start_minutes", 0),
     rebalance_window_end_minutes=p_raw.get("rebalance_window_end_minutes", 1090),
     trading_timezone=p_raw.get("trading_timezone", ""),
     volume_filter_min_ratio=p_raw.get("volume_filter_min_ratio", 0.0),
