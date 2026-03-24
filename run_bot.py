@@ -313,16 +313,9 @@ async def main() -> None:
         await send_alert(tg, msg, "trading_blocked")
         return f"Торговля запрещена: {reason or 'лимит'}"
       now_window = _now_for_window()
-      rt = getattr(cfg.portfolio, "rebalance_time", "10:00") or "10:00"
-      try:
-        rh, rm = map(int, rt.split(":"))
-      except (ValueError, AttributeError):
-        rh, rm = 10, 0
-      w_start = getattr(cfg.portfolio, "rebalance_window_start_minutes", 0) or 0
-      w_end = getattr(cfg.portfolio, "rebalance_window_end_minutes", 24 * 60) or (24 * 60)
-      rt_mins = rh * 60 + rm
       now_mins = now_window.hour * 60 + now_window.minute
-      in_window = (w_start == 0 and w_end >= 24 * 60) or (rt_mins + w_start <= now_mins <= w_end)
+      lo, hi = cfg.portfolio.rebalance_day_minutes_window()
+      in_window = lo <= now_mins <= hi
       prefix = ""
       if not trading_enabled:
         orders = pm.build_rebalance_orders(day_start_equity or 0)
@@ -615,19 +608,8 @@ async def main() -> None:
       rl_train_on_start = getattr(cfg.portfolio, "rl_train_on_start", False)
       rl_train_interval_days = getattr(cfg.portfolio, "rl_train_interval_days", 0) or 0
       rl_instruments = [i for i in cfg.instruments if getattr(i, "strategy", None) == "rl"]
-      raw_window_start = getattr(cfg.portfolio, "rebalance_window_start_minutes", 0) or 0
-      raw_window_end = getattr(cfg.portfolio, "rebalance_window_end_minutes", 24 * 60) or (24 * 60)
-      try:
-        window_start = int(raw_window_start)
-      except (TypeError, ValueError):
-        logger.warning("Планировщик ребаланса: некорректное rebalance_window_start_minutes=%r, используем 0", raw_window_start)
-        window_start = 0
-      try:
-        window_end = int(raw_window_end)
-      except (TypeError, ValueError):
-        logger.warning("Планировщик ребаланса: некорректное rebalance_window_end_minutes=%r, используем 24*60", raw_window_end)
-        window_end = 24 * 60
       rt_mins = hour * 60 + minute
+      we_cfg = int(getattr(cfg.portfolio, "rebalance_window_end_minutes", 24 * 60) or (24 * 60))
       market_index_figi = getattr(cfg.portfolio, "market_index_figi", "") or ""
       market_panic_drop = getattr(cfg.portfolio, "market_panic_drop_pct", 0.05) or 0.0
       vol_low = getattr(cfg.portfolio, "market_vol_low_threshold_pct", 0.01) or 0.01
@@ -642,8 +624,17 @@ async def main() -> None:
         m = int(m) % (24 * 60)
         return f"{m // 60:02d}:{m % 60:02d}"
 
-      window_start_mins = rt_mins + window_start
-      window_end_mins = window_end
+      window_start_mins, window_end_mins = cfg.portfolio.rebalance_day_minutes_window()
+      if we_cfg < 24 * 60 and rt_mins > we_cfg:
+        logger.warning(
+          "Планировщик: в yaml rebalance_time (%s) позже rebalance_window_end_minutes (%s). "
+          "Окно расширено до конца суток %s — увеличьте rebalance_window_end_minutes (мин от полуночи).",
+          _mins_to_hhmm(rt_mins),
+          _mins_to_hhmm(we_cfg),
+          _mins_to_hhmm(window_end_mins),
+        )
+      if getattr(cfg.portfolio, "auto_rebalance_when_stopped", False):
+        logger.info("Планировщик: auto_rebalance_when_stopped=true — цикл торговли без Telegram «Старт»")
       logger.info(
         "Планировщик ребаланса: время=%s, окно=%s–%s (%s), drift=%s порог=%.2f интервал=%dм cooldown=%dм",
         rebalance_time,
@@ -666,9 +657,8 @@ async def main() -> None:
     def _in_rebalance_window() -> bool:
       wnow = _now_for_window()
       now_mins = wnow.hour * 60 + wnow.minute
-      if window_start == 0 and window_end >= 24 * 60:
-        return True
-      return (now_mins >= rt_mins + window_start) and (now_mins <= window_end)
+      lo, hi = cfg.portfolio.rebalance_day_minutes_window()
+      return lo <= now_mins <= hi
 
     while True:
       await asyncio.sleep(60)
@@ -708,6 +698,71 @@ async def main() -> None:
             _mins_to_hhmm(window_start_mins),
             _mins_to_hhmm(window_end_mins),
           )
+
+      day_start = day_start_equity or 0.0
+      scheduler_ok = bool(started) or bool(getattr(cfg.portfolio, "auto_rebalance_when_stopped", False))
+      if scheduler_ok:
+        # До RL / тяжёлого недельного отчёта: иначе цикл мог дойти до ребаланса уже после закрытия окна.
+        if market_index_figi and last_market_check_date != today:
+          last_market_check_date = today
+          panic_today = False
+          try:
+            from_dt = today - timedelta(days=3)
+            df_idx = broker.get_historical_candles(market_index_figi, from_dt, now)
+            if df_idx is not None and len(df_idx) >= 2:
+              close = df_idx["close"]
+              c0, c1 = float(close.iloc[-2]), float(close.iloc[-1])
+              if c0 > 0:
+                ret = (c1 / c0) - 1
+                abs_ret = abs(ret)
+                if ret <= -market_panic_drop:
+                  panic_today = True
+                  hours_left = max(1.0, 24 - wnow.hour)
+                  risk.set_pause_until(hours_left)
+                  await send_alert(tg, f"⏸ Kill-switch: индекс {market_index_figi} упал на {ret*100:.1f}%. Торговля приостановлена до конца дня.", "market_panic", force=True)
+                if abs_ret <= vol_low:
+                  market_vol_level = "low"
+                elif abs_ret >= vol_high:
+                  market_vol_level = "high"
+                else:
+                  market_vol_level = "normal"
+          except Exception:
+            market_vol_level = "normal"
+        if day_start_equity is not None and last_day_reset_date is not None and today != last_day_reset_date:
+          try:
+            equity, _, _ = compute_equity()
+            day_start_equity = equity
+            risk.reset_daily(equity)
+            last_day_reset_date = today
+          except Exception:
+            pass
+        if last_day_reset_date is None and day_start_equity is not None:
+          last_day_reset_date = today
+        if last_rebalance_date != today and _in_rebalance_window() and not panic_today:
+          logger.info(
+            "Авторебаланс по расписанию: запуск (дата %s, window_now=%s, server_now=%s)",
+            today,
+            wnow.isoformat(),
+            now.isoformat(),
+          )
+          try:
+            await broker_get_cash_async()
+          except Exception as e:
+            inc_error()
+            logger.warning("Авторебаланс по расписанию: брокер не отвечает, повторим на следующем тике: %s", e)
+            await send_alert(tg, f"⚠️ Ребаланс отложен: брокер не отвечает ({e})", "rebalance_skip", force=True)
+            continue
+          try:
+            res = await on_rebalance("schedule")
+            await send_alert(tg, f"🤖 Авторебаланс (по расписанию): {res}", "rebalance")
+          except Exception as e:
+            inc_error()
+            logger.exception("Авторебаланс по расписанию: ошибка: %s", e)
+            await send_alert(tg, f"❌ Ошибка авторебаланса: {e}", "rebalance_error")
+            # День отмечаем, иначе при постоянной ошибке — алерт каждую минуту до конца окна.
+          last_rebalance_date = today
+          last_drift_rebalance = now
+          continue
 
       # Дневной дайджест и недельный отчёт — независимо от started.
       # Не требуем minute == digest_m: из-за asyncio.sleep(60) фаза тика редко совпадает с :00 и дайджест «молча» не уходил днями.
@@ -988,69 +1043,6 @@ async def main() -> None:
         elif (now - last_live_ping).total_seconds() >= alert_live_ping_hours * 3600:
           last_live_ping = now
           await send_alert(tg, "🤖 Робот работает.", "live_ping")
-      day_start = day_start_equity or 0.0
-      # Ежедневная оценка состояния рынка по индексу
-      if market_index_figi and last_market_check_date != today:
-        last_market_check_date = today
-        panic_today = False
-        try:
-          from_dt = today - timedelta(days=3)
-          df_idx = broker.get_historical_candles(market_index_figi, from_dt, now)
-          if df_idx is not None and len(df_idx) >= 2:
-            close = df_idx["close"]
-            c0, c1 = float(close.iloc[-2]), float(close.iloc[-1])
-            if c0 > 0:
-              ret = (c1 / c0) - 1
-              abs_ret = abs(ret)
-              if ret <= -market_panic_drop:
-                panic_today = True
-                # Глобальная пауза до конца дня (в зоне окна)
-                hours_left = max(1.0, 24 - wnow.hour)
-                risk.set_pause_until(hours_left)
-                await send_alert(tg, f"⏸ Kill-switch: индекс {market_index_figi} упал на {ret*100:.1f}%. Торговля приостановлена до конца дня.", "market_panic", force=True)
-              if abs_ret <= vol_low:
-                market_vol_level = "low"
-              elif abs_ret >= vol_high:
-                market_vol_level = "high"
-              else:
-                market_vol_level = "normal"
-        except Exception:
-          market_vol_level = "normal"
-      # Единственное место сброса дня: при смене даты обновляем day_start_equity и риск.
-      if day_start_equity is not None and last_day_reset_date is not None and today != last_day_reset_date:
-        try:
-          equity, _, _ = compute_equity()
-          day_start_equity = equity
-          risk.reset_daily(equity)
-          last_day_reset_date = today
-        except Exception:
-          pass
-      if last_day_reset_date is None and day_start_equity is not None:
-        last_day_reset_date = today
-      if last_rebalance_date != today and _in_rebalance_window() and not panic_today:
-        logger.info(
-          "Авторебаланс по расписанию: запуск (дата %s, window_now=%s, server_now=%s)",
-          today,
-          wnow.isoformat(),
-          now.isoformat(),
-        )
-        last_rebalance_date = today
-        last_drift_rebalance = now
-        try:
-          await broker_get_cash_async()
-        except Exception as e:
-          inc_error()
-          logger.warning("Авторебаланс по расписанию: пропуск на сегодня (брокер не отвечает): %s", e)
-          await send_alert(tg, f"⚠️ Ребаланс пропущен: брокер не отвечает ({e})", "rebalance_skip", force=True)
-          continue
-        try:
-          res = await on_rebalance("schedule")
-          await send_alert(tg, f"🤖 Авторебаланс (по расписанию): {res}", "rebalance")
-        except Exception as e:
-          inc_error()
-          logger.exception("Авторебаланс по расписанию: ошибка: %s", e)
-          await send_alert(tg, f"❌ Ошибка авторебаланса: {e}", "rebalance_error")
-        continue
 
       # Адаптация частоты проверки дрейфа по волатильности рынка
       effective_check_interval = check_interval
