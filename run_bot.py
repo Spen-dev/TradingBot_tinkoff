@@ -282,7 +282,7 @@ async def main() -> None:
   async def on_positions() -> str:
     try:
       from tinkoff_bot.telegram_utils import format_money
-      positions = broker.get_portfolio()
+      _, _, positions = broker.get_equity_snapshot(currency=cfg.portfolio.base_currency)
       if not positions:
         return "Нет открытых позиций."
       figi_to_ticker = {i.figi: i.ticker for i in cfg.instruments}
@@ -298,8 +298,7 @@ async def main() -> None:
   async def on_portfolio() -> str:
     try:
       from tinkoff_bot.telegram_utils import format_money, format_pct
-      equity, _, _ = compute_equity()
-      positions = broker.get_portfolio()
+      equity, _, positions = broker.get_equity_snapshot(currency=cfg.portfolio.base_currency)
       figi_to_ticker = {i.figi: i.ticker for i in cfg.instruments}
       current_by_figi = {figi: pos.value for figi, pos in positions.items()}
       total_w = sum(getattr(i, "target_weight", 0.0) for i in cfg.instruments)

@@ -199,9 +199,6 @@ class PortfolioManager:
     self.broker = broker
     self.risk = risk
 
-  def _compute_equity(self, positions: Dict[str, Position], cash: float) -> float:
-    return cash + sum(p.value for p in positions.values())
-
   def _target_values(self, equity: float, prices: Optional[Dict[str, float]] = None) -> Dict[str, float]:
     """Целевые суммы в рублях. Веса из learned_params (если optimize_weights), иначе из конфига."""
     if getattr(self.cfg, "rebalance_by_price", False) and prices:
