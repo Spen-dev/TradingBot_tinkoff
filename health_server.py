@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Callable, Dict, Any
 
 if TYPE_CHECKING:
@@ -370,6 +370,63 @@ def _load_status_snapshot() -> Dict[str, Any] | None:
   return None
 
 
+def _status_trading_date(cfg: "AppConfig | None") -> date:
+  """Календарная дата «торгового дня» для метрик (как в portfolio.trading_timezone)."""
+  try:
+    from zoneinfo import ZoneInfo
+    tz_name = (getattr(cfg.portfolio, "trading_timezone", None) or "").strip() if cfg else ""
+    if tz_name:
+      return datetime.now(ZoneInfo(tz_name)).date()
+  except Exception:
+    pass
+  return date.today()
+
+
+def _daily_pnl_and_drawdown_from_history(equity_now: float, cfg: "AppConfig | None") -> tuple[float, float]:
+  """Дневной PnL и просадка (%) по data/equity_history.jsonl, если нет status_snapshot."""
+  from .equity_history import load_equity_history
+  target = _status_trading_date(cfg)
+  try:
+    pts = load_equity_history(limit=3000)
+  except Exception:
+    return 0.0, 0.0
+  if not pts:
+    return 0.0, 0.0
+  day_start: float | None = None
+  peak = 0.0
+  for p in pts:
+    try:
+      ts_raw = (p.ts or "").strip()
+      if not ts_raw:
+        continue
+      if ts_raw.endswith("Z"):
+        dt = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+      else:
+        dt = datetime.fromisoformat(ts_raw)
+      if dt.tzinfo is not None:
+        try:
+          from zoneinfo import ZoneInfo
+          tz_name = (getattr(cfg.portfolio, "trading_timezone", None) or "").strip() if cfg else ""
+          if tz_name:
+            dt = dt.astimezone(ZoneInfo(tz_name))
+          else:
+            dt = dt.astimezone().replace(tzinfo=None)
+        except Exception:
+          dt = dt.astimezone().replace(tzinfo=None)
+      d = dt.date()
+    except Exception:
+      continue
+    if d == target and day_start is None:
+      day_start = p.equity
+    peak = max(peak, p.equity)
+  peak = max(peak, equity_now)
+  if day_start is None:
+    day_start = equity_now
+  daily_pnl = equity_now - day_start
+  dd_pct = ((peak - equity_now) / peak * 100.0) if peak > 1e-9 else 0.0
+  return daily_pnl, round(dd_pct, 2)
+
+
 async def _handle_api_status(
   broker: "TinkoffBroker | None",
   cfg: "AppConfig | None",
@@ -399,8 +456,10 @@ async def _handle_api_status(
       try:
         equity, cash, positions = broker.get_equity_snapshot(cfg.portfolio.base_currency)
         positions_count = len(positions)
+        daily_pnl, drawdown_pct = _daily_pnl_and_drawdown_from_history(equity, cfg)
         rm = RiskManager(cfg.risk)
-        state = rm.update_equity(equity, equity)
+        day_start_est = equity - daily_pnl
+        state = rm.update_equity(equity, day_start_est)
         trading_allowed = cfg.portfolio.trading_enabled and rm.is_trading_allowed(state)
       except Exception as e:
         logger.debug("api_status: broker/risk error: %s", e)

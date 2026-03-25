@@ -982,7 +982,7 @@ async def main() -> None:
         results = []
         try:
           from tinkoff_bot.train_rl import run_rl_train
-          loop = asyncio.get_event_loop()
+          loop = asyncio.get_running_loop()
           for inv in rl_instruments:
             out_path = base_dir / "data" / f"rl_model_{getattr(inv, 'ticker', inv.figi)}.zip"
             comm = getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003
@@ -1029,7 +1029,7 @@ async def main() -> None:
         strategy_selection_start_done = True
         try:
           from tinkoff_bot.self_learn import run_strategy_selection
-          loop = asyncio.get_event_loop()
+          loop = asyncio.get_running_loop()
           sel_days = getattr(cfg.portfolio, "strategy_selection_days", 90) or 90
           msg, changes = await loop.run_in_executor(
             None,
@@ -1064,7 +1064,7 @@ async def main() -> None:
         if last_sel_date is None or (today - last_sel_date).days >= strategy_selection_interval_days:
           try:
             from tinkoff_bot.self_learn import run_strategy_selection
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             sel_days = getattr(cfg.portfolio, "strategy_selection_days", 90) or 90
             msg, changes = await loop.run_in_executor(
               None,
@@ -1168,7 +1168,7 @@ async def main() -> None:
             except Exception:
               pass
             risk_penalty_mult = 1.0 + (0.5 * min(consecutive, 5) / 5.0)
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             res = await loop.run_in_executor(None, lambda: run_retrain(
               broker, cfg.instruments, days=days,
               commission_rate=getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003,
@@ -1202,7 +1202,7 @@ async def main() -> None:
             results = []
             try:
               from tinkoff_bot.train_rl import run_rl_train
-              loop = asyncio.get_event_loop()
+              loop = asyncio.get_running_loop()
               for inv in rl_instruments:
                 out_path = base_dir / "data" / f"rl_model_{getattr(inv, 'ticker', inv.figi)}.zip"
                 comm = getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003
