@@ -523,13 +523,16 @@ async def main() -> None:
       pause = risk.get_pause_until()
       pause_str = f", пауза до {pause}" if pause else ""
       logger.info("Дневной дайджест (ручной): отправка")
-      await send_alert(
+      sent = await send_alert(
         tg,
         f"📊 Дневной дайджест (ручной): портфель {equity:.2f} {cfg.portfolio.base_currency}, дневной PnL {st.daily_pnl:.2f}, просадка {dd:.1%}{pause_str}",
         "daily_digest_manual",
         force=True,
+        require_telegram=True,
       )
-      return "Ручной дневной дайджест отправлен."
+      if sent:
+        return "Ручной дневной дайджест отправлен."
+      return "Дайджест не доставлен в Telegram (см. bot.log / data/alerts.log, token и admin_chat_id)."
     except Exception as e:
       logger.warning("Дневной дайджест (ручной): %s", e)
       return f"Ошибка при формировании дневного дайджеста: {e}"
@@ -672,6 +675,7 @@ async def main() -> None:
         )
       if getattr(cfg.portfolio, "auto_rebalance_when_stopped", False):
         logger.info("Планировщик: auto_rebalance_when_stopped=true — цикл торговли без Telegram «Старт»")
+      digest_slot_mins = digest_h * 60 + digest_m
       logger.info(
         "Планировщик ребаланса: время=%s, окно=%s–%s (%s), drift=%s порог=%.2f интервал=%dм cooldown=%dм",
         rebalance_time,
@@ -682,6 +686,12 @@ async def main() -> None:
         drift_pct,
         check_interval,
         cooldown_min,
+      )
+      logger.info(
+        "Планировщик: daily_digest_time=%s (минута дня=%d, TZ=%s)",
+        digest_time,
+        digest_slot_mins,
+        tz_name or "локально (datetime.now)",
       )
 
       last_window_state: bool | None = None
@@ -755,9 +765,14 @@ async def main() -> None:
             f"📊 Дневной дайджест: портфель {equity:.2f} {cfg.portfolio.base_currency}, дневной PnL {st.daily_pnl:.2f}, просадка {dd:.1%}{pause_str}",
             "daily_digest",
             force=True,
+            require_telegram=True,
           )
           if ok:
             last_digest_date = today
+          else:
+            logger.warning(
+              "Дневной дайджест: не доставлен в Telegram, дата не отмечена — повтор на следующей минуте (проверьте token/admin_chat_id и логи)",
+            )
           alert_dd = getattr(cfg.portfolio, "alert_drawdown_pct", 0.0) or 0.0
           alert_daily = getattr(cfg.portfolio, "alert_daily_loss_pct", 0.0) or 0.0
           if alert_dd > 0 and dd >= alert_dd and last_alert_drawdown_date != today:
