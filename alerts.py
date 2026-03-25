@@ -46,8 +46,13 @@ async def send_alert(
   message: str,
   alert_type: str = "default",
   force: bool = False,
+  require_telegram: bool = False,
 ) -> bool:
-  """Отправить уведомление в Telegram с ограничением частоты. При ошибке — 1–2 повтора с задержкой, затем запись в data/alerts.log."""
+  """Отправить уведомление в Telegram с ограничением частоты. При ошибке — 1–2 повтора с задержкой, затем запись в data/alerts.log.
+
+  Если require_telegram=True: успех только при реальной доставке в Telegram (иначе False и без cooldown),
+  чтобы планировщик мог повторить отправку (например дневной дайджест).
+  """
   if not force and not _should_send(alert_type):
     return False
   if tg:
@@ -61,8 +66,22 @@ async def send_alert(
         logger.warning("send_alert attempt %d: %s", attempt + 1, e)
         if attempt < 2:
           await asyncio.sleep(2.0 * (attempt + 1))
-  logger.error("Telegram недоступен после 3 попыток, запись в %s: %s", ALERTS_LOG, message)
+    _fallback_write(message)
+    if require_telegram:
+      logger.error(
+        "send_alert: сообщение не доставлено в Telegram (type=%s), см. %s",
+        alert_type,
+        ALERTS_LOG,
+      )
+      return False
+    logger.error("Telegram недоступен после 3 попыток, запись в %s: %s", ALERTS_LOG, message)
+    _mark_sent(alert_type)
+    return True
   _fallback_write(message)
+  if require_telegram:
+    logger.error("send_alert: нет Telegram-контроллера (type=%s), см. %s", alert_type, ALERTS_LOG)
+    return False
+  logger.error("send_alert: tg=None, запись в %s: %s", ALERTS_LOG, message)
   _mark_sent(alert_type)
   return True
 
