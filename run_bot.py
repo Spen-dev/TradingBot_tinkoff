@@ -344,7 +344,7 @@ async def main() -> None:
           msg += " (equity=0 — проверьте доступ к брокеру.)"
         if reason and "пауза" in reason:
           msg += " Сброс: /pause 0"
-        await send_alert(tg, msg, "trading_blocked")
+        await send_alert(tg, msg, "trading_blocked", force=True)
         return f"Торговля запрещена: {reason or 'лимит'}"
       now_window = _now_for_window()
       now_mins = now_window.hour * 60 + now_window.minute
@@ -353,7 +353,12 @@ async def main() -> None:
       prefix = ""
       if not trading_enabled:
         orders = pm.build_rebalance_orders(day_start_equity or 0)
-        await send_alert(tg, f"📋 Режим мониторинга: было бы заявок {len(orders)} (заявки не выставлены)", "monitoring")
+        await send_alert(
+          tg,
+          f"📋 Режим мониторинга: было бы заявок {len(orders)} (заявки не выставлены)",
+          "monitoring",
+          force=True,
+        )
         if not in_window:
           prefix = "⚠️ Сейчас вне торгового окна. "
         return prefix + f"Мониторинг: заявок не выставлено (было бы {len(orders)})"
@@ -367,7 +372,12 @@ async def main() -> None:
         pause_set = pm.risk.update_consecutive_losses(consecutive)
         if pause_set:
           ph = getattr(cfg.risk, "pause_hours", 24) or 24
-          await send_alert(tg, f"⏸ Торговля приостановлена на {ph:.0f} ч из-за серии убытков ({consecutive} подряд).", "pause")
+          await send_alert(
+            tg,
+            f"⏸ Торговля приостановлена на {ph:.0f} ч из-за серии убытков ({consecutive} подряд).",
+            "pause",
+            force=True,
+          )
       except Exception:
         pass
       # Логируем рассчитанные заявки, чтобы отличать "нет отклонений" от "не удалось выставить".
@@ -564,6 +574,7 @@ async def main() -> None:
   )
 
   last_live_ping: datetime | None = None
+  no_trades_alert_for_last_trade_ts: datetime | None = None
 
   try:
     from tinkoff_bot.health_server import run_health_server
@@ -577,7 +588,7 @@ async def main() -> None:
     Любые ошибки внутри планировщика логируются, чтобы задача не умирала молча.
     """
     logger.info("auto_rebalance_scheduler: задача запущена")
-    nonlocal last_trade_time, day_start_equity, last_live_ping
+    nonlocal last_trade_time, day_start_equity, last_live_ping, no_trades_alert_for_last_trade_ts
     try:
       rebalance_time = getattr(cfg.portfolio, "rebalance_time", "10:00")
       try:
@@ -814,17 +825,17 @@ async def main() -> None:
             inc_error()
             logger.warning("Авторебаланс по расписанию: брокер не отвечает, повторим на следующем тике: %s", e)
             await send_alert(tg, f"⚠️ Ребаланс отложен: брокер не отвечает ({e})", "rebalance_skip", force=True)
-            continue
-          try:
-            res = await on_rebalance("schedule")
-            await send_alert(tg, f"🤖 Авторебаланс (по расписанию): {res}", "rebalance_schedule", force=True)
-          except Exception as e:
-            inc_error()
-            logger.exception("Авторебаланс по расписанию: ошибка: %s", e)
-            await send_alert(tg, f"❌ Ошибка авторебаланса: {e}", "rebalance_schedule_error", force=True)
-            # День отмечаем, иначе при постоянной ошибке — алерт каждую минуту до конца окна.
-          last_rebalance_date = today
-          last_drift_rebalance = now
+          else:
+            try:
+              res = await on_rebalance("schedule")
+              await send_alert(tg, f"🤖 Авторебаланс (по расписанию): {res}", "rebalance_schedule", force=True)
+            except Exception as e:
+              inc_error()
+              logger.exception("Авторебаланс по расписанию: ошибка: %s", e)
+              await send_alert(tg, f"❌ Ошибка авторебаланса: {e}", "rebalance_schedule_error", force=True)
+              # День отмечаем, иначе при постоянной ошибке — алерт каждую минуту до конца окна.
+            last_rebalance_date = today
+            last_drift_rebalance = now
 
       # Недельный отчёт и ниже — независимо от started.
       weekly_slot = wh * 60 + wm
@@ -1070,7 +1081,7 @@ async def main() -> None:
           last_live_ping = now
         elif (now - last_live_ping).total_seconds() >= alert_live_ping_hours * 3600:
           last_live_ping = now
-          await send_alert(tg, "🤖 Робот работает.", "live_ping")
+          await send_alert(tg, "🤖 Робот работает.", "live_ping", force=True)
 
       # Адаптация частоты проверки дрейфа по волатильности рынка
       effective_check_interval = check_interval
@@ -1107,7 +1118,14 @@ async def main() -> None:
 
       if no_trades_hours > 0 and trading_enabled and last_trade_time is not None:
         if (now - last_trade_time).total_seconds() >= no_trades_hours * 3600:
-          await send_alert(tg, f"⚠️ Нет сделок более {no_trades_hours} ч. Проверьте логи и доступ к брокеру.", "no_trades")
+          if no_trades_alert_for_last_trade_ts != last_trade_time:
+            no_trades_alert_for_last_trade_ts = last_trade_time
+            await send_alert(
+              tg,
+              f"⚠️ Нет сделок более {no_trades_hours} ч. Проверьте логи и доступ к брокеру.",
+              "no_trades",
+              force=True,
+            )
 
       if inst_pause_after > 0:
         try:
@@ -1153,10 +1171,10 @@ async def main() -> None:
               atr_period=getattr(cfg.portfolio, "volatility_atr_period", 14) or 14,
               tune_by_regime=getattr(cfg.portfolio, "self_learn_tune_by_regime", False),
             ))
-            await send_alert(tg, f"📚 Самообучение: {res}", "self_learn")
+            await send_alert(tg, f"📚 Самообучение: {res}", "self_learn", force=True)
           except Exception as e:
             inc_error()
-            await send_alert(tg, f"❌ Ошибка самообучения: {e}", "self_learn_error")
+            await send_alert(tg, f"❌ Ошибка самообучения: {e}", "self_learn_error", force=True)
       elif auto_retrain_days > 0 and last_retrain_date is None:
         last_retrain_date = today
 
@@ -1185,10 +1203,15 @@ async def main() -> None:
                   ),
                 )
                 results.append(res)
-              await send_alert(tg, f"🧠 RL обучение (раз в {rl_train_interval_days} дн.): " + "; ".join(results), "rl_train")
+              await send_alert(
+                tg,
+                f"🧠 RL обучение (раз в {rl_train_interval_days} дн.): " + "; ".join(results),
+                "rl_train_periodic",
+                force=True,
+              )
             except Exception as e:
               inc_error()
-              await send_alert(tg, f"❌ Ошибка RL обучения: {e}", "rl_train_error")
+              await send_alert(tg, f"❌ Ошибка RL обучения: {e}", "rl_train_periodic_error", force=True)
 
   scheduler_task = asyncio.create_task(auto_rebalance_scheduler())
   logger.info("Планировщик: задача создана (scheduler_task)")
@@ -1208,7 +1231,7 @@ async def main() -> None:
         failures += 1
         if failures >= 3:
           try:
-            await send_alert(tg, "⚠️ Робот: брокер не отвечает после нескольких попыток.", "watchdog")
+            await send_alert(tg, "⚠️ Робот: брокер не отвечает после нескольких попыток.", "watchdog", force=True)
           except Exception as alert_err:
             logger.warning("watchdog send_alert: %s", alert_err)
           failures = 0
