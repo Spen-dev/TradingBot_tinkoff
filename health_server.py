@@ -468,7 +468,7 @@ async def _handle_api_portfolio(broker: "TinkoffBroker | None", cfg: "AppConfig 
   if not broker or not cfg:
     return {"instruments": instruments}
   try:
-    equity, cash, positions = broker.get_equity_snapshot(cfg.portfolio.base_currency)
+    _, _, positions = broker.get_equity_snapshot(cfg.portfolio.base_currency)
     by_figi = {i.figi: i for i in cfg.instruments}
     learned = load_learned_params()
     for figi, pos in positions.items():
