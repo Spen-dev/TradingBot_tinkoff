@@ -129,9 +129,7 @@ async def main() -> None:
     return "\n".join(lines)
 
   def compute_equity() -> tuple[float, float, int]:
-    positions = broker.get_portfolio()
-    cash = broker.get_cash_balance(currency=cfg.portfolio.base_currency)
-    equity = cash + sum(p.value for p in positions.values())
+    equity, cash, positions = broker.get_equity_snapshot(currency=cfg.portfolio.base_currency)
     return equity, cash, len(positions)
 
   def maybe_reset_equity_baseline(equity: float, cash: float, npos: int) -> None:
