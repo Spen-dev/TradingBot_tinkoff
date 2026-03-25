@@ -47,6 +47,11 @@ def _save_all(records: List[dict]) -> None:
     json.dump(records, f, ensure_ascii=False, indent=2)
 
 
+def clear_trade_history() -> None:
+  """Очистить локальный журнал сделок (файл data/trade_history.json)."""
+  _save_all([])
+
+
 def record_trade(
   figi: str,
   ticker: str,

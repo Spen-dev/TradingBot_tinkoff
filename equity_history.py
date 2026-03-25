@@ -24,6 +24,15 @@ def _ensure_dir() -> None:
   _DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def clear_equity_history() -> None:
+  """Удалить историю точек equity для графика дашборда."""
+  try:
+    if _HIST_FILE.exists():
+      _HIST_FILE.unlink()
+  except OSError:
+    pass
+
+
 def append_equity_point(ts: datetime, equity: float, cash: float, positions: int) -> None:
   """Добавить точку на график equity. Хранит историю в jsonl, максимум _MAX_POINTS последних точек."""
   try:
