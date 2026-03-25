@@ -114,8 +114,7 @@ class PortfolioConfig:
   signal_strength_min: float = 0.3  # минимальная сила для расчёта размера заявки
   max_overweight_without_signal_pct: float = 0.0  # при перевесе > N% разрешать сокращение без сигнала sell (0=выкл)
   use_order_book_for_limits: bool = False  # использовать стакан (bid/ask/mid) при расчёте лимитной цены
-  # Динамика ребаланса и контроль по рынку
-  rebalance_interval_hours: float = 0.0  # 0 = раз в день по rebalance_time, >0 = каждые N часов в окне
+  # rebalance_interval_hours объявлен выше (дублирование поля ломало dataclass в части сред)
   market_index_figi: str = ""           # FIGI индекса рынка (например IMOEX), для kill-switch и оценки волатильности
   market_panic_drop_pct: float = 0.05   # дневное падение индекса (в долях), при котором включается глобальная пауза
   market_vol_low_threshold_pct: float = 0.01   # |дневное изм.| ниже этого — низкая волатильность
@@ -329,6 +328,15 @@ VALID_STRATEGIES = (
 def validate_config(cfg: "AppConfig") -> tuple[bool, list[str]]:
   """Проверка конфига и learned_params. Возвращает (ok, список ошибок)."""
   errors: list[str] = []
+  if not (cfg.tinkoff.token or "").strip():
+    errors.append("Tinkoff: не задан токен (TINKOFF_TOKEN / config)")
+  aid = (cfg.tinkoff.account_id or "").strip()
+  if not aid:
+    errors.append("Tinkoff: пустой account_id — укажите TINKOFF_ACCOUNT_ID (после reset_sandbox подставьте новый id)")
+  if not (cfg.telegram.token or "").strip():
+    errors.append("Telegram: не задан токен бота (TELEGRAM_TOKEN)")
+  if not cfg.telegram.admin_chat_id:
+    errors.append("Telegram: admin_chat_id = 0 — уведомления и управление не дойдут (TELEGRAM_ADMIN_CHAT_ID)")
   if not cfg.instruments:
     errors.append("Нет инструментов в конфиге")
   total_w = sum(getattr(i, "target_weight", 0) for i in cfg.instruments)
