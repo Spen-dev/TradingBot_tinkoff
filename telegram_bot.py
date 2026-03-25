@@ -398,7 +398,11 @@ class TelegramController:
   async def send_daily_report(self, text: str) -> None:
     """Отправка отчёта; длинные сообщения разбиваются на части до 4096 символов."""
     for chunk in split_message(text):
-      await self.bot.send_message(self.admin_chat_id, chunk)
+      try:
+        await self.bot.send_message(self.admin_chat_id, chunk)
+      except Exception as e:
+        _log.exception("send_daily_report: chat_id=%s: %s", self.admin_chat_id, e)
+        raise
 
   async def answer_chunked(self, msg: types.Message, text: str) -> None:
     """Ответ в чат с разбивкой длинного текста на несколько сообщений."""
