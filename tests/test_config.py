@@ -11,9 +11,21 @@ from tinkoff_bot.config import load_config, validate_config, InstrumentConfig, P
 
 @patch("tinkoff_bot.learned_params.load_learned_params", return_value={})
 def test_validate_config_empty_instruments(mock_load):
+    class T:
+        token = "tok"
+        account_id = "00000000-0000-0000-0000-000000000001"
+        use_sandbox = True
+
+    class Tel:
+        token = "tg"
+        admin_chat_id = 1
+
     class Cfg:
         instruments = []
         mode = "sandbox"
+        tinkoff = T()
+        telegram = Tel()
+
     cfg = Cfg()
     ok, errs = validate_config(cfg)
     assert ok is False
@@ -25,13 +37,26 @@ def test_validate_config_weights_not_one(mock_load):
     class Inst:
         figi = "BBG000"
         ticker = "X"
-        strategy = "rl"
+        strategy = "momentum"
         target_weight = 0.5
         strategy_params = {}
         lot = 1
+
+    class T:
+        token = "tok"
+        account_id = "00000000-0000-0000-0000-000000000001"
+        use_sandbox = True
+
+    class Tel:
+        token = "tg"
+        admin_chat_id = 1
+
     class Cfg:
         instruments = [Inst()]
         mode = "sandbox"
+        tinkoff = T()
+        telegram = Tel()
+
     cfg = Cfg()
     ok, errs = validate_config(cfg)
     assert ok is False
