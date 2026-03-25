@@ -48,8 +48,7 @@ def instruments():
 
 def test_build_rebalance_orders_returns_list(portfolio_cfg, risk_cfg, instruments):
     broker = MagicMock()
-    broker.get_portfolio.return_value = {}
-    broker.get_cash_balance.return_value = 100_000.0
+    broker.get_equity_snapshot.return_value = (100_000.0, 100_000.0, {})
     broker.get_last_price.return_value = 100.0
     broker.get_historical_candles.return_value = None
 

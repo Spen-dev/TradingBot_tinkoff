@@ -397,10 +397,8 @@ async def _handle_api_status(
       updated_at = str(snap.get("updated_at", updated_at))
     elif broker and cfg:
       try:
-        cash = broker.get_cash_balance(cfg.portfolio.base_currency)
-        positions = broker.get_portfolio()
+        equity, cash, positions = broker.get_equity_snapshot(cfg.portfolio.base_currency)
         positions_count = len(positions)
-        equity = cash + sum(p.value for p in positions.values())
         rm = RiskManager(cfg.risk)
         state = rm.update_equity(equity, equity)
         trading_allowed = cfg.portfolio.trading_enabled and rm.is_trading_allowed(state)
@@ -470,9 +468,7 @@ async def _handle_api_portfolio(broker: "TinkoffBroker | None", cfg: "AppConfig 
   if not broker or not cfg:
     return {"instruments": instruments}
   try:
-    positions: Dict[str, Position] = broker.get_portfolio()
-    cash = broker.get_cash_balance(cfg.portfolio.base_currency)
-    equity = cash + sum(p.value for p in positions.values())
+    equity, cash, positions = broker.get_equity_snapshot(cfg.portfolio.base_currency)
     by_figi = {i.figi: i for i in cfg.instruments}
     learned = load_learned_params()
     for figi, pos in positions.items():

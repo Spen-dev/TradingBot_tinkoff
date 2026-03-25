@@ -334,9 +334,7 @@ def run_strategy_selection(
   deepseek_recs: Dict[str, Dict[str, Any]] = {}
   if allow_deepseek:
     try:
-      positions = broker.get_portfolio()
-      cash = broker.get_cash_balance()
-      equity = cash + sum(getattr(p, "value", 0) for p in positions.values())
+      equity, cash, positions = broker.get_equity_snapshot()
       last_prices: Dict[str, float] = {}
       for i in instruments:
         pos = positions.get(i.figi)

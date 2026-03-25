@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -48,6 +48,9 @@ class Position:
 
 
 class TinkoffBroker:
+  # Валютные FIGI — в «бумагах» не учитываем; ликвидность задаём остатком от total_amount_portfolio.
+  _CURRENCY_FIGIS = frozenset({"RUB000UTSTOM", "BBG0013HGFT4", "BBG0013HJJ31"})
+
   def __init__(self, cfg: TinkoffConfig):
     self._cfg = cfg
 
@@ -57,21 +60,18 @@ class TinkoffBroker:
     with client_cls(self._cfg.token) as client:
       yield client
 
-  def get_portfolio(self) -> Dict[str, Position]:
+  def _fetch_portfolio_raw(self):
     with self._client() as client:
       if self._cfg.use_sandbox:
-        resp = client.sandbox.get_sandbox_portfolio(account_id=self._cfg.account_id)
-      else:
-        resp = client.operations.get_portfolio(account_id=self._cfg.account_id)
+        return client.sandbox.get_sandbox_portfolio(account_id=self._cfg.account_id)
+      return client.operations.get_portfolio(account_id=self._cfg.account_id)
 
-    # Исключаем валютные позиции (RUB и т.д.) — они дублируют Cash
-    CURRENCY_FIGIS = frozenset({"RUB000UTSTOM", "BBG0013HGFT4", "BBG0013HJJ31"})
-
+  def _positions_from_response(self, resp) -> Dict[str, Position]:
     positions: Dict[str, Position] = {}
     for p in resp.positions:
       figi = p.figi
       itype = str(getattr(p, "instrument_type", "") or "").lower()
-      if figi in CURRENCY_FIGIS or "currency" in itype or itype == "3":  # 3 = INSTRUMENT_TYPE_CURRENCY
+      if figi in self._CURRENCY_FIGIS or "currency" in itype or itype == "3":
         continue
       current_price = _quotation_to_float(p.current_price)
       avg_price = _quotation_to_float(p.average_position_price)
@@ -85,36 +85,55 @@ class TinkoffBroker:
       )
     return positions
 
-  def get_cash_balance(self, currency: str = "RUB") -> float:
-    """Доступный кэш = money - blocked из positions (30034 если использовать total_amount_currencies)."""
+  def get_portfolio(self) -> Dict[str, Position]:
+    return self._positions_from_response(self._fetch_portfolio_raw())
+
+  def _cash_from_positions_api(self, currency: str) -> float:
+    """Деньги по operations.get_positions (money − blocked). При ошибке — 0."""
     with self._client() as client:
       try:
         pos = client.operations.get_positions(account_id=self._cfg.account_id)
       except Exception:
         pos = None
-    if pos is not None:
-      money_sum = sum(
-        _money_to_float(m) for m in (getattr(pos, "money", None) or [])
-        if getattr(m, "currency", "").upper() == currency.upper()
-      )
-      blocked_sum = sum(
-        _money_to_float(b) for b in (getattr(pos, "blocked", None) or [])
-        if getattr(b, "currency", "").upper() == currency.upper()
-      )
-      return max(0.0, money_sum - blocked_sum)
-
-    # fallback: portfolio total_amount_currencies
-    with self._client() as client:
-      if self._cfg.use_sandbox:
-        resp = client.sandbox.get_sandbox_portfolio(account_id=self._cfg.account_id)
-      else:
-        resp = client.operations.get_portfolio(account_id=self._cfg.account_id)
-    m = getattr(resp, "total_amount_currencies", None)
-    if m is None:
+    if pos is None:
       return 0.0
-    if getattr(m, "currency", "").upper() == currency.upper():
-      return _money_to_float(m)
-    return 0.0
+    money_sum = sum(
+      _money_to_float(m) for m in (getattr(pos, "money", None) or [])
+      if getattr(m, "currency", "").upper() == currency.upper()
+    )
+    blocked_sum = sum(
+      _money_to_float(b) for b in (getattr(pos, "blocked", None) or [])
+      if getattr(b, "currency", "").upper() == currency.upper()
+    )
+    return max(0.0, money_sum - blocked_sum)
+
+  def get_equity_snapshot(self, currency: str = "RUB") -> Tuple[float, float, Dict[str, Position]]:
+    """Один запрос портфеля: эквити, свободно в валюте (остаток относительно оценки бумаг), позиции без валюты.
+
+    Эквити берём из total_amount_portfolio (согласованная оценка брокера); cash = equity − сумма(бумаги),
+    чтобы не смешивать get_positions и get_portfolio (иначе возможно cash > equity).
+    Если total_amount_portfolio нет или валюта не совпала — fallback: cash из get_positions, equity = cash + бумаги.
+    """
+    resp = self._fetch_portfolio_raw()
+    positions = self._positions_from_response(resp)
+    sec_total = sum(p.value for p in positions.values())
+    tap = getattr(resp, "total_amount_portfolio", None)
+    cur = str(getattr(tap, "currency", "") or "").upper() if tap is not None else ""
+    if tap is not None and cur == currency.upper():
+      equity = _money_to_float(tap)
+      cash = max(0.0, equity - sec_total)
+      return equity, cash, positions
+    cash = self._cash_from_positions_api(currency)
+    if cash <= 0 and sec_total <= 0:
+      m = getattr(resp, "total_amount_currencies", None)
+      if m is not None and getattr(m, "currency", "").upper() == currency.upper():
+        cash = _money_to_float(m)
+    equity = cash + sec_total
+    return equity, cash, positions
+
+  def get_cash_balance(self, currency: str = "RUB") -> float:
+    """Свободные средства в одной методике со get_equity_snapshot (предпочтительно остаток от total_amount_portfolio)."""
+    return self.get_equity_snapshot(currency)[1]
 
   def get_historical_candles(
     self,

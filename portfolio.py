@@ -217,9 +217,7 @@ class PortfolioManager:
 
   def rebalance_needed(self, day_start_equity: float, drift_pct: float) -> bool:
     """Ребаланс нужен, если какая-то доля отклонилась от целевой больше чем на drift_pct (0.05 = 5%)."""
-    positions = self.broker.get_portfolio()
-    cash = self.broker.get_cash_balance()
-    equity = self._compute_equity(positions, cash)
+    equity, _, positions = self.broker.get_equity_snapshot(getattr(self.cfg, "base_currency", "RUB") or "RUB")
     if equity <= 0:
       return False
     risk_state: RiskState = self.risk.update_equity(equity, day_start_equity)
@@ -252,9 +250,7 @@ class PortfolioManager:
     return lots * lot if lots > 0 else 0
 
   def build_rebalance_orders(self, day_start_equity: float) -> List[RebalanceOrder]:
-    positions = self.broker.get_portfolio()
-    cash = self.broker.get_cash_balance()
-    equity = self._compute_equity(positions, cash)
+    equity, cash, positions = self.broker.get_equity_snapshot(getattr(self.cfg, "base_currency", "RUB") or "RUB")
     risk_state: RiskState = self.risk.update_equity(equity, day_start_equity)
 
     if not self.risk.is_trading_allowed(risk_state):

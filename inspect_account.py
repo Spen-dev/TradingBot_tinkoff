@@ -13,10 +13,10 @@ def main() -> None:
   print()
 
   broker = TinkoffBroker(cfg.tinkoff)
-  cash = broker.get_cash_balance(currency=cfg.portfolio.base_currency)
-  positions = broker.get_portfolio()
+  equity, cash, positions = broker.get_equity_snapshot(currency=cfg.portfolio.base_currency)
 
-  print(f"Cash: {cash}")
+  print(f"Equity (total_amount_portfolio − бумаги при согласованном снимке): {equity}")
+  print(f"Cash (остаток): {cash}")
   if not positions:
     print("Positions: <none>")
   else:
