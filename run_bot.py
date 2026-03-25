@@ -728,6 +728,40 @@ async def main() -> None:
             _mins_to_hhmm(window_end_mins),
           )
 
+      # Дневной дайджест — до scheduler_ok и до любых continue (иначе после авторебаланса слот дайджеста пропускался).
+      day_start_for_digest = day_start_equity or 0.0
+      digest_slot = digest_h * 60 + digest_m
+      if last_digest_date != today and now_slot >= digest_slot:
+        try:
+          equity, cash, npos = compute_equity()
+          st = risk.update_equity(equity, day_start_for_digest)
+          dd = (st.max_equity_seen - st.equity) / max(st.max_equity_seen, 1e-9)
+          pause = risk.get_pause_until()
+          pause_str = f", пауза до {pause}" if pause else ""
+          logger.info(
+            "Дневной дайджест: отправка (window_now=%s, now_slot=%d >= %d)",
+            wnow.isoformat(), now_slot, digest_slot,
+          )
+          ok = await send_alert(
+            tg,
+            f"📊 Дневной дайджест: портфель {equity:.2f} {cfg.portfolio.base_currency}, дневной PnL {st.daily_pnl:.2f}, просадка {dd:.1%}{pause_str}",
+            "daily_digest",
+            force=True,
+          )
+          if ok:
+            last_digest_date = today
+          alert_dd = getattr(cfg.portfolio, "alert_drawdown_pct", 0.0) or 0.0
+          alert_daily = getattr(cfg.portfolio, "alert_daily_loss_pct", 0.0) or 0.0
+          if alert_dd > 0 and dd >= alert_dd and last_alert_drawdown_date != today:
+            last_alert_drawdown_date = today
+            await send_alert(tg, f"⚠️ Просадка портфеля {dd:.1%} превысила порог {alert_dd:.1%}.", "alert_drawdown", force=True)
+          day_start_val = max(day_start_for_digest, 1e-9)
+          if alert_daily > 0 and st.daily_pnl < 0 and (-st.daily_pnl / day_start_val) >= alert_daily and last_alert_daily_loss_date != today:
+            last_alert_daily_loss_date = today
+            await send_alert(tg, f"⚠️ Дневной убыток {st.daily_pnl:.2f} ({-st.daily_pnl/day_start_val:.1%}) превысил порог {alert_daily:.1%}.", "alert_daily_loss", force=True)
+        except Exception as e:
+          logger.warning("Дневной дайджест: %s", e)
+
       day_start = day_start_equity or 0.0
       scheduler_ok = bool(started) or bool(getattr(cfg.portfolio, "auto_rebalance_when_stopped", False))
       if scheduler_ok:
@@ -791,43 +825,8 @@ async def main() -> None:
             # День отмечаем, иначе при постоянной ошибке — алерт каждую минуту до конца окна.
           last_rebalance_date = today
           last_drift_rebalance = now
-          continue
 
-      # Дневной дайджест и недельный отчёт — независимо от started.
-      # Не требуем minute == digest_m: из-за asyncio.sleep(60) фаза тика редко совпадает с :00 и дайджест «молча» не уходил днями.
-      day_start_for_digest = day_start_equity or 0.0
-      digest_slot = digest_h * 60 + digest_m
-      if last_digest_date != today and now_slot >= digest_slot:
-        try:
-          equity, cash, npos = compute_equity()
-          st = risk.update_equity(equity, day_start_for_digest)
-          dd = (st.max_equity_seen - st.equity) / max(st.max_equity_seen, 1e-9)
-          pause = risk.get_pause_until()
-          pause_str = f", пауза до {pause}" if pause else ""
-          logger.info(
-            "Дневной дайджест: отправка (window_now=%s, now_slot=%d >= %d)",
-            wnow.isoformat(), now_slot, digest_slot,
-          )
-          ok = await send_alert(
-            tg,
-            f"📊 Дневной дайджест: портфель {equity:.2f} {cfg.portfolio.base_currency}, дневной PnL {st.daily_pnl:.2f}, просадка {dd:.1%}{pause_str}",
-            "daily_digest",
-            force=True,
-          )
-          if ok:
-            last_digest_date = today
-          alert_dd = getattr(cfg.portfolio, "alert_drawdown_pct", 0.0) or 0.0
-          alert_daily = getattr(cfg.portfolio, "alert_daily_loss_pct", 0.0) or 0.0
-          if alert_dd > 0 and dd >= alert_dd and last_alert_drawdown_date != today:
-            last_alert_drawdown_date = today
-            await send_alert(tg, f"⚠️ Просадка портфеля {dd:.1%} превысила порог {alert_dd:.1%}.", "alert_drawdown", force=True)
-          day_start_val = max(day_start_for_digest, 1e-9)
-          if alert_daily > 0 and st.daily_pnl < 0 and (-st.daily_pnl / day_start_val) >= alert_daily and last_alert_daily_loss_date != today:
-            last_alert_daily_loss_date = today
-            await send_alert(tg, f"⚠️ Дневной убыток {st.daily_pnl:.2f} ({-st.daily_pnl/day_start_val:.1%}) превысил порог {alert_daily:.1%}.", "alert_daily_loss", force=True)
-        except Exception as e:
-          logger.warning("Дневной дайджест: %s", e)
-
+      # Недельный отчёт и ниже — независимо от started.
       weekly_slot = wh * 60 + wm
       if wnow.weekday() == weekly_weekday and last_weekly_report_date != today and now_slot >= weekly_slot:
         try:
