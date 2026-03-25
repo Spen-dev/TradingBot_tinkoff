@@ -71,21 +71,18 @@ def main() -> None:
     raise SystemExit("Задайте токен Tinkoff в .env (TINKOFF_TOKEN) или config.yaml.")
 
   with SandboxClient(token) as client:
-    resp = client.sandbox.get_sandbox_accounts()
+    # Актуальный SDK: список счетов — UsersService (get_sandbox_accounts помечен deprecated).
+    # Метода clear_sandbox_account в SandboxService больше нет: позиции сбрасываются закрытием счёта.
+    resp = client.users.get_accounts()
     accounts = list(resp.accounts or [])
     if not accounts:
       print("Sandbox-счетов нет — открываем новый.")
     else:
-      print("Текущие sandbox-счета (очистка и закрытие):")
+      print("Текущие sandbox-счета (закрытие):")
       for acc in accounts:
         print(f"- {acc.id} ({acc.name})")
       for acc in accounts:
         aid = acc.id
-        try:
-          client.sandbox.clear_sandbox_account(account_id=aid)
-          print(f"clear_sandbox_account: {aid}")
-        except Exception as e:
-          print(f"clear_sandbox_account failed for {aid}: {e}")
         try:
           client.sandbox.close_sandbox_account(account_id=aid)
           print(f"close_sandbox_account: {aid}")
