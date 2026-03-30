@@ -94,6 +94,7 @@ def test_load_config_minimal():
     try:
         cfg = load_config(path)
         assert cfg.portfolio.base_currency == "RUB"
+        assert cfg.portfolio.auto_rebalance_when_stopped is True
         assert len(cfg.instruments) == 2
         assert cfg.risk.max_drawdown == 0.15
     finally:
