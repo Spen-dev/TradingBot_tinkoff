@@ -50,6 +50,11 @@ async def main() -> None:
   logger.info("tinkoff_bot v%s", app_version)
   base_dir = Path(__file__).resolve().parent
   cfg = load_config(str(base_dir / "config.yaml"))
+  if not getattr(cfg.portfolio, "auto_rebalance_when_stopped", False):
+    logger.warning(
+      "Авторебаланс и дрейф по расписанию не идут без «Старт» в Telegram. "
+      "Включите portfolio.auto_rebalance_when_stopped: true в config.yaml или нажмите Старт."
+    )
   # Режим sandbox/real: в реале автоматически ужесточаем риски и размеры позиций
   try:
     if getattr(cfg, "mode", "sandbox") == "real":
@@ -638,7 +643,18 @@ async def main() -> None:
         if last_digest_date == today or now_slot < digest_slot_mins:
           continue
         day_start_for_digest = day_start_equity or 0.0
-        equity, cash, npos = compute_equity()
+        try:
+          equity, cash, npos = compute_equity()
+        except Exception as eq_e:
+          logger.warning("Дневной дайджест: compute_equity: %s", eq_e)
+          await send_alert(
+            tg,
+            f"📊 Дневной дайджест: не удалось снять портфель ({eq_e}). Повтор в следующие минуты.",
+            "daily_digest",
+            force=True,
+            require_telegram=False,
+          )
+          continue
         st = risk.update_equity(equity, day_start_for_digest)
         dd = (st.max_equity_seen - st.equity) / max(st.max_equity_seen, 1e-9)
         pause = risk.get_pause_until()
@@ -691,111 +707,113 @@ async def main() -> None:
     """
     logger.info("auto_rebalance_scheduler: задача запущена")
     nonlocal last_trade_time, day_start_equity, last_live_ping, no_trades_alert_for_last_trade_ts
+    rebalance_time = getattr(cfg.portfolio, "rebalance_time", "10:00")
     try:
-      rebalance_time = getattr(cfg.portfolio, "rebalance_time", "10:00")
-      try:
-        hour, minute = map(int, rebalance_time.split(":"))
-      except (ValueError, AttributeError):
-        hour, minute = 10, 0
-      no_trades_hours = getattr(cfg.portfolio, "no_trades_alert_hours", 0) or 0
-      last_rebalance_date: date | None = None
-      last_drift_rebalance: datetime | None = None
-      last_retrain_date: date | None = None
-      last_rl_train_date: date | None = None
-      rl_train_start_done = False
-      strategy_selection_start_done = False
-      auto_strategy_selection_on_start = getattr(cfg.portfolio, "auto_strategy_selection_on_start", False)
-      strategy_selection_interval_days = getattr(cfg.portfolio, "strategy_selection_interval_days", 0) or 0
-      strategy_selection_state_file = base_dir / "data" / "strategy_selection_state.json"
-      last_day_reset_date: date | None = None
-      last_weekly_report_date: date | None = None
-      alert_live_ping_hours = getattr(cfg.portfolio, "alert_live_ping_hours", 0.0) or 0.0
-      weekly_weekday = getattr(cfg.portfolio, "weekly_report_weekday", 6) or 6
-      weekly_time = getattr(cfg.portfolio, "weekly_report_time", "18:00") or "18:00"
-      try:
-        wh, wm = map(int, weekly_time.split(":"))
-      except (ValueError, AttributeError):
-        wh, wm = 18, 0
-      inst_pause_after = getattr(cfg.portfolio, "instrument_pause_after_losses", 0) or 0
-      inst_pause_hours = getattr(cfg.portfolio, "instrument_pause_hours", 24.0) or 24.0
-      # Безопасное приведение к int/float: если в config.yaml вдруг строки, не валимся с TypeError
-      raw_check_interval = getattr(cfg.portfolio, "rebalance_check_interval_minutes", 30)
-      try:
-        check_interval = max(1, int(raw_check_interval))
-      except (TypeError, ValueError):
-        logger.warning("Планировщик ребаланса: некорректное rebalance_check_interval_minutes=%r, используем 30", raw_check_interval)
-        check_interval = 30
-      raw_cooldown = getattr(cfg.portfolio, "rebalance_cooldown_minutes", 60)
-      try:
-        cooldown_min = int(raw_cooldown)
-      except (TypeError, ValueError):
-        logger.warning("Планировщик ребаланса: некорректное rebalance_cooldown_minutes=%r, используем 60", raw_cooldown)
-        cooldown_min = 60
-      raw_drift_pct = getattr(cfg.portfolio, "rebalance_drift_pct", 0.05)
-      try:
-        drift_pct = float(raw_drift_pct)
-      except (TypeError, ValueError):
-        logger.warning("Планировщик ребаланса: некорректное rebalance_drift_pct=%r, используем 0.05", raw_drift_pct)
-        drift_pct = 0.05
-      on_drift = getattr(cfg.portfolio, "rebalance_on_drift", True)
-      raw_ri_h = getattr(cfg.portfolio, "rebalance_interval_hours", 0.0) or 0.0
-      try:
-        ri_hours = max(0.0, float(raw_ri_h))
-      except (TypeError, ValueError):
-        logger.warning("Планировщик: некорректное rebalance_interval_hours=%r, используем 0 (раз в день)", raw_ri_h)
-        ri_hours = 0.0
-      last_interval_rebalance_at: datetime | None = None
-      last_drift_eligibility_ts: datetime | None = None
-      auto_retrain_days = getattr(cfg.portfolio, "auto_retrain_interval_days", 0) or 0
-      rl_train_on_start = getattr(cfg.portfolio, "rl_train_on_start", False)
-      rl_train_interval_days = getattr(cfg.portfolio, "rl_train_interval_days", 0) or 0
-      rl_instruments = [i for i in cfg.instruments if getattr(i, "strategy", None) == "rl"]
-      rt_mins = hour * 60 + minute
-      we_cfg = int(getattr(cfg.portfolio, "rebalance_window_end_minutes", 24 * 60) or (24 * 60))
-      market_index_figi = getattr(cfg.portfolio, "market_index_figi", "") or ""
-      market_panic_drop = getattr(cfg.portfolio, "market_panic_drop_pct", 0.05) or 0.0
-      vol_low = getattr(cfg.portfolio, "market_vol_low_threshold_pct", 0.01) or 0.01
-      vol_high = getattr(cfg.portfolio, "market_vol_high_threshold_pct", 0.03) or 0.03
-      last_market_check_date: date | None = None
-      market_vol_level: str = "normal"  # low / normal / high
-      panic_today: bool = False
+      parts = [p for p in str(rebalance_time).strip().split(":") if p.strip() != ""]
+      hour, minute = int(parts[0]), int(parts[1])
+    except (ValueError, AttributeError, IndexError):
+      hour, minute = 10, 0
+    no_trades_hours = getattr(cfg.portfolio, "no_trades_alert_hours", 0) or 0
+    last_rebalance_date: date | None = None
+    last_drift_rebalance: datetime | None = None
+    last_retrain_date: date | None = None
+    last_rl_train_date: date | None = None
+    rl_train_start_done = False
+    strategy_selection_start_done = False
+    auto_strategy_selection_on_start = getattr(cfg.portfolio, "auto_strategy_selection_on_start", False)
+    strategy_selection_interval_days = getattr(cfg.portfolio, "strategy_selection_interval_days", 0) or 0
+    strategy_selection_state_file = base_dir / "data" / "strategy_selection_state.json"
+    last_day_reset_date: date | None = None
+    last_weekly_report_date: date | None = None
+    alert_live_ping_hours = getattr(cfg.portfolio, "alert_live_ping_hours", 0.0) or 0.0
+    weekly_weekday = getattr(cfg.portfolio, "weekly_report_weekday", 6) or 6
+    weekly_time = getattr(cfg.portfolio, "weekly_report_time", "18:00") or "18:00"
+    try:
+      wp = [p for p in str(weekly_time).strip().split(":") if p.strip() != ""]
+      wh, wm = int(wp[0]), int(wp[1])
+    except (ValueError, AttributeError, IndexError):
+      wh, wm = 18, 0
+    inst_pause_after = getattr(cfg.portfolio, "instrument_pause_after_losses", 0) or 0
+    inst_pause_hours = getattr(cfg.portfolio, "instrument_pause_hours", 24.0) or 24.0
+    # Безопасное приведение к int/float: если в config.yaml вдруг строки, не валимся с TypeError
+    raw_check_interval = getattr(cfg.portfolio, "rebalance_check_interval_minutes", 30)
+    try:
+      check_interval = max(1, int(raw_check_interval))
+    except (TypeError, ValueError):
+      logger.warning("Планировщик ребаланса: некорректное rebalance_check_interval_minutes=%r, используем 30", raw_check_interval)
+      check_interval = 30
+    raw_cooldown = getattr(cfg.portfolio, "rebalance_cooldown_minutes", 60)
+    try:
+      cooldown_min = int(raw_cooldown)
+    except (TypeError, ValueError):
+      logger.warning("Планировщик ребаланса: некорректное rebalance_cooldown_minutes=%r, используем 60", raw_cooldown)
+      cooldown_min = 60
+    raw_drift_pct = getattr(cfg.portfolio, "rebalance_drift_pct", 0.05)
+    try:
+      drift_pct = float(raw_drift_pct)
+    except (TypeError, ValueError):
+      logger.warning("Планировщик ребаланса: некорректное rebalance_drift_pct=%r, используем 0.05", raw_drift_pct)
+      drift_pct = 0.05
+    on_drift = getattr(cfg.portfolio, "rebalance_on_drift", True)
+    raw_ri_h = getattr(cfg.portfolio, "rebalance_interval_hours", 0.0) or 0.0
+    try:
+      ri_hours = max(0.0, float(raw_ri_h))
+    except (TypeError, ValueError):
+      logger.warning("Планировщик: некорректное rebalance_interval_hours=%r, используем 0 (раз в день)", raw_ri_h)
+      ri_hours = 0.0
+    last_interval_rebalance_at: datetime | None = None
+    last_drift_eligibility_ts: datetime | None = None
+    auto_retrain_days = getattr(cfg.portfolio, "auto_retrain_interval_days", 0) or 0
+    rl_train_on_start = getattr(cfg.portfolio, "rl_train_on_start", False)
+    rl_train_interval_days = getattr(cfg.portfolio, "rl_train_interval_days", 0) or 0
+    rl_instruments = [i for i in cfg.instruments if getattr(i, "strategy", None) == "rl"]
+    rt_mins = hour * 60 + minute
+    we_cfg = int(getattr(cfg.portfolio, "rebalance_window_end_minutes", 24 * 60) or (24 * 60))
+    market_index_figi = getattr(cfg.portfolio, "market_index_figi", "") or ""
+    market_panic_drop = getattr(cfg.portfolio, "market_panic_drop_pct", 0.05) or 0.0
+    vol_low = getattr(cfg.portfolio, "market_vol_low_threshold_pct", 0.01) or 0.01
+    vol_high = getattr(cfg.portfolio, "market_vol_high_threshold_pct", 0.03) or 0.03
+    last_market_check_date: date | None = None
+    market_vol_level: str = "normal"  # low / normal / high
+    panic_today: bool = False
 
-      tz_name = (getattr(cfg.portfolio, "trading_timezone", None) or "").strip()
+    tz_name = (getattr(cfg.portfolio, "trading_timezone", None) or "").strip()
 
-      def _mins_to_hhmm(m: int) -> str:
-        m = int(m) % (24 * 60)
-        return f"{m // 60:02d}:{m % 60:02d}"
+    def _mins_to_hhmm(m: int) -> str:
+      m = int(m) % (24 * 60)
+      return f"{m // 60:02d}:{m % 60:02d}"
 
+    try:
       window_start_mins, window_end_mins = cfg.portfolio.rebalance_day_minutes_window()
-      if we_cfg < 24 * 60 and rt_mins > we_cfg:
-        logger.warning(
-          "Планировщик: в yaml rebalance_time (%s) позже rebalance_window_end_minutes (%s). "
-          "Окно расширено до конца суток %s — увеличьте rebalance_window_end_minutes (мин от полуночи).",
-          _mins_to_hhmm(rt_mins),
-          _mins_to_hhmm(we_cfg),
-          _mins_to_hhmm(window_end_mins),
-        )
-      if getattr(cfg.portfolio, "auto_rebalance_when_stopped", False):
-        logger.info("Планировщик: auto_rebalance_when_stopped=true — цикл торговли без Telegram «Старт»")
-      logger.info(
-        "Планировщик ребаланса: время=%s, окно=%s–%s (%s), drift=%s порог=%.2f интервал=%dм cooldown=%dм, по расписанию каждые %.2f ч (0 = раз в день)",
-        rebalance_time,
-        _mins_to_hhmm(window_start_mins),
-        _mins_to_hhmm(window_end_mins),
-        tz_name or "локально",
-        "on" if on_drift else "off",
-        drift_pct,
-        check_interval,
-        cooldown_min,
-        ri_hours,
-      )
-
-      last_window_state: bool | None = None
-      last_window_state_date: date | None = None
-      last_started_state: bool | None = None
     except Exception:
-      logger.exception("auto_rebalance_scheduler: ошибка при инициализации планировщика")
-      return
+      logger.exception("Планировщик: rebalance_day_minutes_window недоступно, используем 10:00–23:59")
+      window_start_mins, window_end_mins = hour * 60 + minute, 24 * 60 - 1
+    if we_cfg < 24 * 60 and rt_mins > we_cfg:
+      logger.warning(
+        "Планировщик: в yaml rebalance_time (%s) позже rebalance_window_end_minutes (%s). "
+        "Окно расширено до конца суток %s — увеличьте rebalance_window_end_minutes (мин от полуночи).",
+        _mins_to_hhmm(rt_mins),
+        _mins_to_hhmm(we_cfg),
+        _mins_to_hhmm(window_end_mins),
+      )
+    if getattr(cfg.portfolio, "auto_rebalance_when_stopped", False):
+      logger.info("Планировщик: auto_rebalance_when_stopped=true — цикл торговли без Telegram «Старт»")
+    logger.info(
+      "Планировщик ребаланса: время=%s, окно=%s–%s (%s), drift=%s порог=%.2f интервал=%dм cooldown=%dм, по расписанию каждые %.2f ч (0 = раз в день)",
+      rebalance_time,
+      _mins_to_hhmm(window_start_mins),
+      _mins_to_hhmm(window_end_mins),
+      tz_name or "локально",
+      "on" if on_drift else "off",
+      drift_pct,
+      check_interval,
+      cooldown_min,
+      ri_hours,
+    )
+
+    last_window_state: bool | None = None
+    last_window_state_date: date | None = None
+    last_started_state: bool | None = None
 
     def _in_rebalance_window() -> bool:
       wnow = _now_for_window()
@@ -921,6 +939,49 @@ async def main() -> None:
                   else:
                     last_rebalance_date = today
                   last_drift_rebalance = now
+
+          # Дрейф — сразу после расписания (не после тяжёлого выбора стратегий / снимка)
+          effective_check_interval = check_interval
+          if market_vol_level == "low":
+            effective_check_interval = max(check_interval, 60)
+          elif market_vol_level == "high":
+            effective_check_interval = min(check_interval, 15)
+          drift_eligible = (
+            last_drift_eligibility_ts is None
+            or (now - last_drift_eligibility_ts).total_seconds() >= effective_check_interval * 60
+          )
+          if on_drift and drift_eligible and _in_rebalance_window() and not panic_today:
+            last_drift_eligibility_ts = now
+            if last_drift_rebalance and (now - last_drift_rebalance).total_seconds() < cooldown_min * 60:
+              pass
+            else:
+              try:
+                if pm.rebalance_needed(day_start, drift_pct):
+                  try:
+                    await broker_get_cash_async()
+                  except Exception as e:
+                    inc_error()
+                    await send_alert(tg, f"⚠️ Ребаланс пропущен: брокер не отвечает ({e})", "rebalance_skip", force=True)
+                  else:
+                    logger.info(
+                      "Ребаланс по дрейфу: запуск (дата %s, window_now=%s, drift_pct=%.2f)",
+                      today,
+                      wnow.isoformat(),
+                      drift_pct,
+                    )
+                    outcome = await on_rebalance("drift")
+                    await send_alert(
+                      tg,
+                      f"📈 Ребаланс по дрейфу (дрейф >{drift_pct:.0%}): {outcome.message}",
+                      "rebalance_drift",
+                      force=True,
+                    )
+                    if outcome.tick_drift_cooldown:
+                      last_drift_rebalance = now
+              except Exception as e:
+                inc_error()
+                logger.exception("Ребаланс по дрейфу: ошибка: %s", e)
+                await send_alert(tg, f"❌ Ошибка ребаланса по дрейфу: {e}", "rebalance_drift_error", force=True)
 
         # Недельный отчёт и ниже — независимо от started.
         weekly_slot = wh * 60 + wm
@@ -1167,50 +1228,6 @@ async def main() -> None:
           elif (now - last_live_ping).total_seconds() >= alert_live_ping_hours * 3600:
             last_live_ping = now
             await send_alert(tg, "🤖 Робот работает.", "live_ping", force=True)
-
-        # Адаптация частоты проверки дрейфа по волатильности рынка
-        effective_check_interval = check_interval
-        if market_vol_level == "low":
-          effective_check_interval = max(check_interval, 60)
-        elif market_vol_level == "high":
-          effective_check_interval = min(check_interval, 15)
-
-        drift_eligible = (
-          last_drift_eligibility_ts is None
-          or (now - last_drift_eligibility_ts).total_seconds() >= effective_check_interval * 60
-        )
-        if on_drift and drift_eligible and _in_rebalance_window() and not panic_today:
-          last_drift_eligibility_ts = now
-          if last_drift_rebalance and (now - last_drift_rebalance).total_seconds() < cooldown_min * 60:
-            pass
-          else:
-            try:
-              if pm.rebalance_needed(day_start, drift_pct):
-                try:
-                  await broker_get_cash_async()
-                except Exception as e:
-                  inc_error()
-                  await send_alert(tg, f"⚠️ Ребаланс пропущен: брокер не отвечает ({e})", "rebalance_skip", force=True)
-                else:
-                  logger.info(
-                    "Ребаланс по дрейфу: запуск (дата %s, window_now=%s, drift_pct=%.2f)",
-                    today,
-                    wnow.isoformat(),
-                    drift_pct,
-                  )
-                  outcome = await on_rebalance("drift")
-                  await send_alert(
-                    tg,
-                    f"📈 Ребаланс по дрейфу (дрейф >{drift_pct:.0%}): {outcome.message}",
-                    "rebalance_drift",
-                    force=True,
-                  )
-                  if outcome.tick_drift_cooldown:
-                    last_drift_rebalance = now
-            except Exception as e:
-              inc_error()
-              logger.exception("Ребаланс по дрейфу: ошибка: %s", e)
-              await send_alert(tg, f"❌ Ошибка ребаланса по дрейфу: {e}", "rebalance_drift_error", force=True)
 
         if no_trades_hours > 0 and trading_enabled and last_trade_time is not None:
           if (now - last_trade_time).total_seconds() >= no_trades_hours * 3600:
