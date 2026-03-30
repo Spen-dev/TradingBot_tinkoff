@@ -634,8 +634,10 @@ async def main() -> None:
       digest_slot_mins,
       tz_label,
     )
+    _dig_first_wake = True
     while True:
-      await asyncio.sleep(60)
+      await asyncio.sleep(2 if _dig_first_wake else 60)
+      _dig_first_wake = False
       try:
         wnow = _now_for_window()
         today = wnow.date()
@@ -821,8 +823,11 @@ async def main() -> None:
       lo, hi = cfg.portfolio.rebalance_day_minutes_window()
       return lo <= now_mins <= hi
 
+    _plan_first_wake = True
     while True:
-      await asyncio.sleep(60)
+      # Первый тик через 2 с — не ждать минуту после старта (проще отладить расписание и Telegram).
+      await asyncio.sleep(2 if _plan_first_wake else 60)
+      _plan_first_wake = False
       try:
         now = datetime.now()
         wnow = _now_for_window()
@@ -833,6 +838,14 @@ async def main() -> None:
         if last_started_state is None or bool(started) != last_started_state:
           last_started_state = bool(started)
           logger.info("Планировщик: started=%s (server=%s window=%s %s)", started, now.isoformat(), wnow.isoformat(), tz_name or "local")
+
+        # Живая отбивка: не зависит от «Старт» и от блока ниже continue.
+        if alert_live_ping_hours > 0:
+          if last_live_ping is None:
+            last_live_ping = now
+          elif (now - last_live_ping).total_seconds() >= alert_live_ping_hours * 3600:
+            last_live_ping = now
+            await send_alert(tg, "🤖 Робот работает (планировщик активен).", "live_ping", force=True)
 
         in_window = _in_rebalance_window()
         if (last_window_state is None) or (in_window != last_window_state) or (last_window_state_date != today):
@@ -1222,12 +1235,6 @@ async def main() -> None:
                 await send_alert(tg, "📊 Смена стратегий: " + ", ".join(f"{t} {o}→{n}" for t, o, n in changes), "strategy_changes", force=True)
             except Exception as e:
               logger.exception("Periodic strategy selection: %s", e)
-        if alert_live_ping_hours > 0:
-          if last_live_ping is None:
-            last_live_ping = now
-          elif (now - last_live_ping).total_seconds() >= alert_live_ping_hours * 3600:
-            last_live_ping = now
-            await send_alert(tg, "🤖 Робот работает.", "live_ping", force=True)
 
         if no_trades_hours > 0 and trading_enabled and last_trade_time is not None:
           if (now - last_trade_time).total_seconds() >= no_trades_hours * 3600:
@@ -1337,7 +1344,7 @@ async def main() -> None:
     interval = max(60, getattr(cfg.portfolio, "watchdog_interval_seconds", 90))
     while True:
       await asyncio.sleep(interval)
-      if not started:
+      if not started and not getattr(cfg.portfolio, "auto_rebalance_when_stopped", False):
         continue
       try:
         await broker_get_cash_async()

@@ -204,6 +204,11 @@ def load_config(path: str = "config.yaml") -> AppConfig:
 
   p_raw = raw.get("portfolio", {})
   mode = raw.get("mode", p_raw.get("mode", "sandbox"))
+  # Песочница: без ключа в yaml включать цикл без кнопки «Старт» (на сервере часто забывают ключ).
+  if "auto_rebalance_when_stopped" in p_raw:
+    auto_rebalance_when_stopped = bool(p_raw.get("auto_rebalance_when_stopped"))
+  else:
+    auto_rebalance_when_stopped = str(mode).lower() == "sandbox"
   portfolio = PortfolioConfig(
     base_currency=p_raw.get("base_currency", "RUB"),
     rebalance_frequency=p_raw.get("rebalance_frequency", "daily"),
@@ -220,7 +225,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     rebalance_drift_pct=p_raw.get("rebalance_drift_pct", 0.05),
     rebalance_check_interval_minutes=p_raw.get("rebalance_check_interval_minutes", 30),
     rebalance_cooldown_minutes=p_raw.get("rebalance_cooldown_minutes", 60),
-    auto_rebalance_when_stopped=p_raw.get("auto_rebalance_when_stopped", False),
+    auto_rebalance_when_stopped=auto_rebalance_when_stopped,
     rebalance_interval_hours=p_raw.get("rebalance_interval_hours", 0.0),
     retrain_days=p_raw.get("retrain_days", 60),
     auto_retrain_interval_days=p_raw.get("auto_retrain_interval_days", 0),
