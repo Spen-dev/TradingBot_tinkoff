@@ -935,23 +935,29 @@ async def main() -> None:
             else:
               try:
                 outcome = await on_rebalance("schedule")
-                await send_alert(
-                  tg,
-                  f"🤖 Авторебаланс (по расписанию): {outcome.message}",
-                  "rebalance_schedule",
-                  force=True,
-                )
-              except Exception as e:
-                inc_error()
-                logger.exception("Авторебаланс по расписанию: ошибка: %s", e)
-                await send_alert(tg, f"❌ Ошибка авторебаланса: {e}", "rebalance_schedule_error", force=True)
-              else:
+                # Состояние планировщика — сразу после on_rebalance (не смешивать с Telegram: при ошибке send не повторять сделки).
                 if outcome.tick_schedule_calendar:
                   if ri_hours > 0:
                     last_interval_rebalance_at = now
                   else:
                     last_rebalance_date = today
                   last_drift_rebalance = now
+                try:
+                  await send_alert(
+                    tg,
+                    f"🤖 Авторебаланс (по расписанию): {outcome.message}",
+                    "rebalance_schedule",
+                    force=True,
+                  )
+                except Exception as send_e:
+                  logger.warning("Авторебаланс (по расписанию): Telegram: %s — результат уже учтён в планировщике", send_e)
+              except Exception as e:
+                inc_error()
+                logger.exception("Авторебаланс по расписанию: ошибка: %s", e)
+                try:
+                  await send_alert(tg, f"❌ Ошибка авторебаланса: {e}", "rebalance_schedule_error", force=True)
+                except Exception as send_e2:
+                  logger.warning("Авторебаланс: не удалось отправить алерт об ошибке: %s", send_e2)
 
           # Дрейф — сразу после расписания (не после тяжёлого выбора стратегий / снимка)
           effective_check_interval = check_interval
@@ -983,14 +989,17 @@ async def main() -> None:
                       drift_pct,
                     )
                     outcome = await on_rebalance("drift")
-                    await send_alert(
-                      tg,
-                      f"📈 Ребаланс по дрейфу (дрейф >{drift_pct:.0%}): {outcome.message}",
-                      "rebalance_drift",
-                      force=True,
-                    )
                     if outcome.tick_drift_cooldown:
                       last_drift_rebalance = now
+                    try:
+                      await send_alert(
+                        tg,
+                        f"📈 Ребаланс по дрейфу (дрейф >{drift_pct:.0%}): {outcome.message}",
+                        "rebalance_drift",
+                        force=True,
+                      )
+                    except Exception as send_e:
+                      logger.warning("Ребаланс по дрейфу: Telegram: %s — cooldown уже учтён", send_e)
               except Exception as e:
                 inc_error()
                 logger.exception("Ребаланс по дрейфу: ошибка: %s", e)
