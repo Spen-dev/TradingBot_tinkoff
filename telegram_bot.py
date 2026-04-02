@@ -395,14 +395,26 @@ class TelegramController:
         await self._on_pause(24.0)
         await msg.answer("Пауза на 24 ч установлена.")
 
+  async def _send_admin_text(self, text: str) -> None:
+    """Одно сообщение в admin-чат с учётом flood control (после серии сделок следующий алерт часто ловит 429)."""
+    for _ in range(12):
+      try:
+        await self.bot.send_message(self.admin_chat_id, text)
+        return
+      except Exception as e:
+        retry_after = getattr(e, "retry_after", None)
+        if retry_after is not None:
+          wait = float(retry_after) + 0.5
+          _log.warning("Telegram flood control: ждём %.1f с (chat_id=%s)", wait, self.admin_chat_id)
+          await asyncio.sleep(wait)
+          continue
+        _log.exception("send_message admin chat_id=%s: %s", self.admin_chat_id, e)
+        raise
+
   async def send_daily_report(self, text: str) -> None:
     """Отправка отчёта; длинные сообщения разбиваются на части до 4096 символов."""
     for chunk in split_message(text):
-      try:
-        await self.bot.send_message(self.admin_chat_id, chunk)
-      except Exception as e:
-        _log.exception("send_daily_report: chat_id=%s: %s", self.admin_chat_id, e)
-        raise
+      await self._send_admin_text(chunk)
 
   async def answer_chunked(self, msg: types.Message, text: str) -> None:
     """Ответ в чат с разбивкой длинного текста на несколько сообщений."""
@@ -452,7 +464,7 @@ class TelegramController:
     simulation: bool = False,
   ) -> None:
     text = self.format_trade_message(ticker, direction, quantity, price, amount, commission, simulation=simulation)
-    await self.bot.send_message(self.admin_chat_id, text)
+    await self._send_admin_text(text)
 
   def request_stop(self) -> None:
     """Вызвать извне для запроса остановки (устанавливает событие)."""
