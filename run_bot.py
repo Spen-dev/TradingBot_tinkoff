@@ -425,7 +425,7 @@ async def main() -> None:
         dry_run = getattr(cfg.portfolio, "dry_run", False)
         last_trade_time = datetime.now()
         inc_trades(len(trades))
-        for t in trades:
+        for idx, t in enumerate(trades):
           await tg.send_trade_notification(
             ticker=t["ticker"],
             direction=t["direction"],
@@ -435,6 +435,8 @@ async def main() -> None:
             commission=t["commission"],
             simulation=dry_run,
           )
+          if idx + 1 < len(trades):
+            await asyncio.sleep(0.35)
         msg = f"Выставлено заявок: {len(trades)}"
         if dry_run:
           msg += " (симуляция, dry-run)"
