@@ -1,0 +1,49 @@
+# Secrets
+.env
+*.key
+*.pem
+config_local.py
+
+# Data
+data/
+*.db
+*.sqlite
+*.log
+logs/
+*.pkl
+*.cache
+*.h5
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Temporary
+*.tmp
+*.bak
+*.pid
+*.sock
+
+# Tests
+tests/__pycache__/
+.tox/
