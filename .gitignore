@@ -1,49 +1,34 @@
-# Secrets
+# Секреты и окружение
 .env
-*.key
+.env.local
 *.pem
-config_local.py
-
-# Data
-data/
-*.db
-*.sqlite
-*.log
-logs/
-*.pkl
-*.cache
-*.h5
 
 # Python
+.venv/
+venv/
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.pytest_cache/
-.coverage
-htmlcov/
+*.py[cod]
 *.egg-info/
+.eggs/
 dist/
 build/
 
-# IDE
-.vscode/
+# Логи и данные
+data/logs/
+data/*.json
+data/*.zip
+data/*.log
+learned_params/*.json
+
+# IDE и ОС
 .idea/
-*.swp
-*.swo
-*~
+.vscode/
 .DS_Store
 
-# Docker
-.dockerignore
-docker-compose.override.yml
+# Тесты
+.pytest_cache/
+.coverage
+htmlcov/
 
-# Temporary
-*.tmp
-*.bak
-*.pid
-*.sock
-
-# Tests
-tests/__pycache__/
-.tox/
+# Бэкапы
+backup_*.zip

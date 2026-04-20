@@ -1,0 +1,13 @@
+# Запуск робота на VPS (секреты из .env на сервере)
+services:
+  bot:
+    build: .
+    image: tinkoff_bot:latest
+    container_name: tinkoff_bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./learned_params:/app/learned_params
+    ports:
+      - "8000:8000"

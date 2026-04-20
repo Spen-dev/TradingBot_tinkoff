@@ -1,0 +1,167 @@
+# Секреты (token, account_id, admin_chat_id) лучше задавать через .env
+tinkoff:
+  token: ""                    # API-токен Тинькофф Инвестиций
+  account_id: ""               # ID счёта (для sandbox может подставиться автоматически)
+  use_sandbox: true            # true = песочница, false = боевой счёт
+
+telegram:
+  token: ""                    # Токен бота Telegram
+  admin_chat_id: 0             # ID чата для уведомлений (только этот чат управляет роботом)
+
+mode: "sandbox"                # sandbox | real — режим работы (в real ужесточаются риски)
+
+portfolio:
+  base_currency: "RUB"         # Базовая валюта портфеля
+  rebalance_frequency: "daily" # Частота ребаланса по расписанию
+  rebalance_time: "10:00"      # Время ежедневного ребаланса (ЧЧ:ММ)
+  commission_rate: 0.0003      # Комиссия брокера с оборота (0.03%)
+  dry_run: false               # true = заявки не выставляются, только расчёт и уведомления
+  limit_price_pct: 0.001       # Отклонение лимитной цены от текущей (0.1%)
+  limit_price_pct_buy: 0       # 0 = использовать limit_price_pct; иначе свой % для покупок
+  limit_price_pct_sell: 0      # 0 = использовать limit_price_pct; иначе свой % для продаж
+  cancel_open_orders_before_rebalance: true  # Отменять активные лимитные заявки робота по тем же FIGI перед ребалансом
+  rebalance_by_price: true     # Считать целевые суммы по текущим ценам
+  rebalance_on_drift: true     # Ребаланс по дрейфу весов между проверками
+  rebalance_drift_pct: 0.03    # Более агрессивный порог дрейфа для ребаланса (3% для теста)
+  rebalance_check_interval_minutes: 10   # Чаще проверять дрейф (каждые 10 мин)
+  rebalance_cooldown_minutes: 30         # Пауза между ребалансами по дрейфу (30 мин)
+  # true = авторебаланс по расписанию/дрейфу без кнопки «Старт» в Telegram (после docker restart)
+  auto_rebalance_when_stopped: true
+  rebalance_interval_hours: 0  # 0 = раз в день по rebalance_time; >0 = каждые N ч в окне
+  retrain_days: 100            # Глубина истории для переобучения (самообучение; больше — стабильнее подбор)
+  auto_retrain_interval_days: 7   # Автопереобучение раз в N дней (0 = выкл)
+  volatility_atr_period: 14    # Период ATR для волатильности
+  watchdog_interval_seconds: 90  # Интервал проверки доступности брокера (сек)
+  request_timeout_seconds: 30     # Таймаут вызовов брокера в планировщике и watchdog (сек)
+  trading_enabled: true        # Разрешить выставление заявок (false = только мониторинг)
+  alert_cooldown_minutes: 30   # Минимальный интервал между однотипными алертами (мин)
+  no_trades_alert_hours: 72    # Алерт «нет сделок» после N часов (песочница как в бою)
+  daily_digest_time: "18:00"   # Время ежедневного дайджеста (ЧЧ:ММ)
+  rl_train_on_start: true      # Обучать RL-модели при старте робота
+  rl_train_interval_days: 14   # Периодическое переобучение RL раз в N дней (0 = только при старте)
+  rl_train_days: 365           # Глубина истории для обучения RL (дней)
+  rl_train_timesteps: 50000    # Шагов PPO при обучении RL
+  rl_train_walk_forward_ratio: 0.7  # Доля данных на обучение, остальное — валидация (0.5–0.9)
+  self_learn_train_ratio: 0.7  # Доля выборки на обучение при самообучении
+  self_learn_use_sharpe: true  # Оптимизировать по Шарпу (иначе по PnL)
+  self_learn_min_trades: 3     # Мин. сделок (учёт max(train, val); меньше — мягче для RL/редких сделок)
+  self_learn_risk_penalty: 0.5 # Штраф за просадку в метрике самообучения
+  self_learn_optuna_trials: 30 # Число испытаний Optuna (0 = перебор по сетке)
+  self_learn_optimize_weights: true  # Подбирать целевые веса инструментов при самообучении
+  self_learn_weight_cap: 0.4   # Максимальный целевой вес одного инструмента при оптимизации
+  # Устарело: на окно не влияет. Начало окна = rebalance_time (например 10:00 — с 10:00 МСК).
+  rebalance_window_start_minutes: 0
+  # Конец окна — минуты от ПОЛУНОЧИ (1090 ≈ 18:10). Если раньше rebalance_time — бот расширит до 23:59 и залогирует предупреждение.
+  rebalance_window_end_minutes: 1090
+  trading_timezone: "Europe/Moscow"    # Часовой пояс окна (пусто = время сервера)
+  volume_filter_min_ratio: 0.0 # Мин. объём дня / скольз. среднее объёма (0 = не фильтровать)
+  atr_percentile_days: 90      # Окно для перцентилей ATR (0 = не использовать)
+  use_market_regime: true      # Учитывать режим рынка (ADX: тренд/флэт) для стратегий
+  use_market_regime_by_index: false  # true = один режим по индексу для всех инструментов
+  adx_period: 14               # Период индикатора ADX
+  adx_threshold: 25.0          # ADX выше — тренд, ниже adx_threshold_low — флэт
+  adx_threshold_low: 0.0       # 0 = авто (0.8*adx_threshold); иначе нижний порог weak_trend
+  self_learn_tune_by_regime: false  # Подбирать параметры отдельно для тренда и флэта
+  signal_strength_mult: 0.2    # Влияние силы сигнала на размер заявки (buy: 1+mult*strength)
+  signal_strength_min: 0.3     # Минимальная сила сигнала для расчёта размера
+  max_overweight_without_signal_pct: 0.0  # При перевесе > N% разрешать сокращение без sell (0=выкл)
+  use_order_book_for_limits: true  # Использовать стакан (bid/ask/mid) при расчёте лимитной цены (экспериментально)
+  # Режим рынка и защита
+  market_index_figi: "BBG004730JJ5"  # FIGI индекса (напр. MOEX) для kill-switch и волатильности
+  market_panic_drop_pct: 0.05  # Дневное падение индекса (доля) — глобальная пауза до конца дня
+  market_vol_low_threshold_pct: 0.01   # |изменение индекса| ниже — низкая волатильность
+  market_vol_high_threshold_pct: 0.03  # |изменение индекса| выше — высокая волатильность
+  single_trade_max_pct: 0.10   # Макс. доля одной сделки от equity (как в бою)
+  max_position_pct: 0.25       # Макс. доля одной позиции от equity (как в бою)
+  hold_timeout_days: 0         # Принудительно сбрасывать позицию после N дней (0 = выкл)
+  instrument_pause_after_losses: 3   # Пауза по инструменту после N убыточных сделок подряд (как в бою)
+  instrument_pause_hours: 24.0 # Длительность паузы по инструменту (ч)
+  signal_confirmation_candles: 0     # Требовать N свечей в направлении сигнала (0=выкл)
+  weekly_report_weekday: 6     # День недели недельного отчёта (0=Пн, 6=Вс)
+  weekly_report_time: "18:00"  # Время отправки недельного отчёта
+  use_candle_cache: true      # Кэшировать свечи (меньше запросов к брокеру, как в бою)
+  candle_cache_days: 60        # Срок хранения кэша свечей (дней)
+  gap_risk_enabled: true     # Учитывать риск гэпов (не открывать у «гэповых» бумаг к концу дня)
+  gap_min_pct: 0.03            # Минимальный гэп (доля) для признания бумаги гэповой
+  gap_close_minutes: 60        # За сколько минут до конца окна не открывать по гэповым
+  no_new_orders_before_end_minutes: 30  # В последние N мин окна не выставлять новые лимитные покупки (0=выкл)
+  alert_drawdown_pct: 0.05     # Алерт при просадке портфеля >= N% (0=выкл)
+  alert_daily_loss_pct: 0.02   # Алерт при дневном убытке >= N% от старта дня (0=выкл)
+  alert_live_ping_hours: 24    # Раз в N ч отправлять «Робот работает» (песочница как в бою)
+  use_deepseek_advisor: true # true = для инструментов со стратегией deepseek запрашивать рекомендации у DeepSeek API
+  deepseek_model: "deepseek-chat"  # Модель DeepSeek (ключ DEEPSEEK_API_KEY в .env)
+  auto_strategy_selection_on_start: true # true = при старте выбрать лучшую стратегию по бэктесту для каждого инструмента
+  strategy_selection_days: 90    # глубина истории (дней) для выбора стратегии
+  strategy_selection_interval_days: 14  # пересчёт выбора стратегии раз в N дней (0 = только при старте и /select_strategy)
+  strategy_change_min_delta: 0.05  # не менять стратегию, если прирост оценки меньше порога
+  strategy_diversity_max_share: 0.5  # макс. доля портфеля у одной стратегии, 0 = не ограничивать
+  deepseek_cache_hours: 2.0  # кэш рекомендаций DeepSeek (часы), 0 = не кэшировать
+  deepseek_history_days: 10  # дней истории в контексте для DeepSeek (доходность, волатильность)
+  rebalance_decisions_log: true  # писать в data/logs/rebalance_decisions.log решения ребаланса
+  aggressive_rebalance: true
+
+risk:
+  max_drawdown: 0.15           # Макс. допустимая просадка от пика (15%) — блокировка торговли
+  daily_loss_limit: 0.03       # Макс. дневной убыток от старта дня (3%) — блокировка
+  daily_loss_soft_limit: 0.02  # Мягкий режим: уменьшать размер сделок при дневном убытке >2%
+  daily_loss_soft_scale: 0.5   # Во сколько раз уменьшать размер заявок в мягком режиме (0.5 = вдвое)
+  default_stop_loss_pct: 0.05  # Стоп-лосс по умолчанию (5% от входа)
+  trailing_stop_pct: 0.02      # Трейлинг-стоп (2% от пика)
+  take_profit_pct: 0.03        # Тейк-профит (3% от входа)
+  trailing_take_profit_pct: 0.02  # Трейлинг тейк-профит (откат от пика 2%)
+  var_confidence: 0.95         # Уровень доверия для VaR
+  kelly_fraction_cap: 0.5      # Ограничение доли Келли (макс. доля ставки)
+  pause_after_consecutive_losses: 3  # Пауза торговли после N убыточных сделок подряд
+  pause_hours: 24              # Длительность паузы после серии убытков (ч)
+  min_pnl_to_count_loss_rub: 50  # Минимальный убыток в рублях для учёта в серии убытков
+
+web:
+  host: "0.0.0.0"              # Хост HTTP health-check
+  port: 8000                   # Порт HTTP health-check
+  dashboard_url: "http://144.31.77.154:8000/dashboard"  # URL дашборда для кнопки в Telegram
+
+instruments:
+  # figi — идентификатор бумаги, ticker — тикер, lot — размер лота, strategy — стратегия (rl, momentum, ...)
+  # target_weight — целевая доля в портфеле (сумма по всем ≈ 1), strategy_params — параметры стратегии
+  - figi: BBG004730ZJ9
+    ticker: VTBR
+    lot: 10
+    strategy: rl
+    target_weight: 0.2
+    strategy_params:
+      rl_model_path: data/rl_model_VTBR.zip
+  - figi: BBG004730RP0
+    ticker: GAZP
+    lot: 10
+    strategy: rl
+    target_weight: 0.2
+    strategy_params:
+      rl_model_path: data/rl_model_GAZP.zip
+  - figi: BBG004730JJ5
+    ticker: MOEX
+    lot: 1
+    strategy: rl
+    target_weight: 0.2
+    strategy_params:
+      rl_model_path: data/rl_model_MOEX.zip
+  - figi: BBG004S681B4
+    ticker: NLMK
+    lot: 10
+    strategy: rl
+    target_weight: 0.2
+    strategy_params:
+      rl_model_path: data/rl_model_NLMK.zip
+  - figi: BBG004730N88
+    ticker: SBER
+    lot: 10
+    strategy: rl
+    target_weight: 0.1
+    strategy_params:
+      rl_model_path: data/rl_model_SBER.zip
+  - figi: BBG004731354
+    ticker: LKOH
+    lot: 1
+    strategy: rl
+    target_weight: 0.1
+    strategy_params:
+      rl_model_path: data/rl_model_LKOH.zip

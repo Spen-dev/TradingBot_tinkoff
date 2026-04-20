@@ -1,0 +1,659 @@
+"""HTTP health-check и метрики: /health и /metrics для мониторинга."""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from datetime import date, datetime
+from typing import TYPE_CHECKING, Callable, Dict, Any
+
+if TYPE_CHECKING:
+  from .broker import TinkoffBroker, Position
+  from .config import AppConfig
+
+logger = logging.getLogger(__name__)
+
+
+DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>tinkoff_bot — арена стратегий</title>
+  <style>
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 16px 24px 24px; background: #050816; color: #e5e9f0; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand-logo { width: 28px; height: 28px; border-radius: 8px; background: radial-gradient(circle at 30% 20%, #ffe27a, #ff4d67); display: flex; align-items: center; justify-content: center; font-size: 16px; }
+    .brand-title { font-weight: 600; font-size: 18px; }
+    .pill-switch { display: inline-flex; padding: 2px; border-radius: 999px; background: #111827; box-shadow: 0 0 0 1px rgba(255,255,255,0.06); }
+    .pill-option { border: none; background: transparent; color: #a0a7c0; font-size: 11px; padding: 4px 10px; border-radius: 999px; cursor: pointer; }
+    .pill-option-active { background: linear-gradient(90deg, #f97316, #facc15); color: #111827; font-weight: 600; }
+    .layout { display: flex; gap: 16px; margin-top: 12px; }
+    .layout-left { flex: 0 0 320px; }
+    .layout-right { flex: 1; display: flex; flex-direction: column; gap: 16px; }
+    .card { background: #0b1120; border-radius: 12px; padding: 12px 16px; box-shadow: 0 0 0 1px rgba(15,23,42,0.9), 0 18px 45px rgba(15,23,42,0.8); }
+    .card h2 { margin: 0 0 8px 0; font-size: 15px; }
+    .metric-row { display: flex; flex-wrap: wrap; gap: 8px 12px; font-size: 12px; }
+    .metric-label { color: #9ca3af; }
+    .metric-value { font-weight: 500; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 4px 6px; text-align: right; border-bottom: 1px solid rgba(15,23,42,0.9); }
+    th { text-align: left; font-weight: 500; color: #9ca3af; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+    tr:nth-child(even) { background: rgba(15,23,42,0.8); }
+    .status-ok { color: #4ade80; }
+    .status-bad { color: #fb7185; }
+    .status-warn { color: #facc15; }
+    .pill { display: inline-block; padding: 2px 6px; border-radius: 999px; font-size: 11px; }
+    .pill-ok { background: rgba(34,197,94,0.14); color: #4ade80; }
+    .pill-bad { background: rgba(248,113,113,0.12); color: #fb7185; }
+    .pill-warn { background: rgba(250,204,21,0.14); color: #facc15; }
+    .small { font-size: 12px; color: #9ca3af; }
+    .chart-wrapper { height: 260px; }
+    .text-ok { color: #4ade80; font-weight: 600; }
+    .mode-sandbox-val { color: #facc15; font-weight: 500; }
+    .mode-real-val { color: #4ade80; font-weight: 500; }
+    .text-bad { color: #fb7185; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-logo">AI</div>
+      <div>
+        <div class="brand-title">tinkoff_bot</div>
+      </div>
+    </div>
+    <div class="pill-switch">
+      <button class="pill-option pill-option-active" id="market-ru" type="button">RU рынок</button>
+      <button class="pill-option" id="market-us" type="button">US рынок</button>
+    </div>
+  </div>
+
+  <div class="layout">
+    <div class="layout-left">
+      <div class="card" id="status-card">
+        <div id="status-body" class="small">Загрузка…</div>
+      </div>
+    </div>
+    <div class="layout-right">
+      <div class="card">
+        <h2>Общая стоимость портфеля</h2>
+        <div class="small" id="equity-subtitle">Equity по дням</div>
+        <div class="chart-wrapper">
+          <canvas id="equity-chart"></canvas>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Анализ портфеля</h2>
+        <table id="portfolio-table">
+          <thead>
+            <tr>
+              <th>Тикер</th>
+              <th>Кол-во</th>
+              <th>Цена</th>
+              <th>Сумма</th>
+              <th>Целевой вес</th>
+              <th>Стратегия</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+  <script>
+    async function fetchJson(url) {
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return await r.json();
+    }
+
+    function fmtMoney(v) {
+      return (v || 0).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function fmtPct(v) {
+      return (v || 0).toFixed(2) + '%';
+    }
+
+    function formatUptime(sec) {
+      if (!sec || sec < 0) return '0 мин';
+      const d = Math.floor(sec / 86400);
+      const h = Math.floor((sec % 86400) / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const parts = [];
+      if (d > 0) parts.push(d + ' дн.');
+      if (h > 0 || d > 0) parts.push(h + ' ч');
+      parts.push(m + ' мин');
+      return parts.join(' ');
+    }
+
+    async function refresh() {
+      try {
+        const [status, portfolio, equityHist] = await Promise.all([
+          fetchJson('/api/status'),
+          fetchJson('/api/portfolio'),
+          fetchJson('/api/equity'),
+        ]);
+
+        const sEl = document.getElementById('status-body');
+        const allowed = status.trading_allowed;
+        const riskHtml = allowed
+          ? '<span class="text-ok">торговля разрешена</span>'
+          : '<span class="text-bad">торговля остановлена</span>';
+        const robotStatusHtml = status.robot_running
+          ? 'Статус робота <span class="text-ok">Работает</span>, ' + riskHtml
+          : 'Статус робота <span class="text-bad">Не работает</span>, ' + riskHtml;
+        const modeLabel = (status.mode === 'real' || status.mode === 'live') ? 'Реал' : 'Песочница';
+        const modeValClass = modeLabel === 'Реал' ? 'mode-real-val' : 'mode-sandbox-val';
+        const uptimeStr = formatUptime(status.uptime_seconds || 0);
+        sEl.innerHTML = `
+          <div class="metric-row">
+            <div><span class="metric-label">Версия</span> <span class="metric-value">${status.version || '?'}</span></div>
+          </div>
+          <div class="small" style="margin-top:6px;">${robotStatusHtml}</div>
+          <div class="metric-row" style="margin-top:6px;">
+            <div><span class="metric-label">Режим</span> <span class="metric-value ${modeValClass}">— ${modeLabel}</span></div>
+          </div>
+          <div class="metric-row" style="margin-top:6px;">
+            <div><span class="metric-label">Свободные средства</span> <span class="metric-value">${fmtMoney(status.cash)} руб</span></div>
+          </div>
+          <div class="metric-row" style="margin-top:6px;">
+            <div><span class="metric-label">Позиции</span> <span class="metric-value">${status.positions_count}</span></div>
+          </div>
+          <div class="metric-row" style="margin-top:6px;">
+            <div><span class="metric-label">Стоимость всех открытых позиций</span> <span class="metric-value">${fmtMoney((status.equity || 0) - (status.cash || 0))} руб</span></div>
+          </div>
+          <div class="metric-row" style="margin-top:6px;">
+            <div><span class="metric-label">Дневной результат</span> <span class="metric-value">${fmtMoney(status.daily_pnl)} руб</span></div>
+            <div><span class="metric-label">Просадка</span> <span class="metric-value">${fmtPct(status.drawdown_pct)}</span></div>
+          </div>
+          <div class="small" style="margin-top:6px;">Время работы: ${uptimeStr}</div>
+          <div class="small" style="margin-top:4px; color:#6b7280;">Обновлено (МСК): ${status.updated_at ? new Date(status.updated_at).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow' }) : '—'}</div>
+          <div class="small" style="margin-top:2px; color:#4b5563;">Сервер: ${status.server_time_iso ? new Date(status.server_time_iso).toLocaleString('ru-RU') : '—'} · Окно ребаланса (${status.trading_timezone || 'локально'}): ${status.window_time_iso ? new Date(status.window_time_iso).toLocaleString('ru-RU') : '—'}</div>
+        `;
+
+        const tbody = document.querySelector('#portfolio-table tbody');
+        tbody.innerHTML = '';
+        (portfolio.instruments || []).forEach(it => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td style="text-align:left;">${it.ticker || it.figi}</td>
+            <td>${it.quantity}</td>
+            <td>${fmtMoney(it.price)}</td>
+            <td>${fmtMoney(it.value)}</td>
+            <td>${fmtPct((it.target_weight || 0) * 100)}</td>
+            <td style="text-align:left;">${it.strategy || '-'}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+
+        // Эволюция стоимости портфеля: две точки в день — при ребалансе и последнее значение за день
+        let pts = equityHist.points || [];
+        let usedSynthetic = false;
+        if (pts.length === 0 && status.equity != null && status.equity !== undefined) {
+          const now = new Date();
+          const yesterday = new Date(now);
+          yesterday.setDate(yesterday.getDate() - 1);
+          pts = [
+            { ts: yesterday.toISOString(), equity: status.equity },
+            { ts: now.toISOString(), equity: status.equity },
+          ];
+          usedSynthetic = true;
+        }
+        const rebalanceTimeStr = (status.rebalance_time || '10:00').trim();
+        const [rbH, rbM] = rebalanceTimeStr.split(':').map(s => parseInt(s, 10) || 0);
+        function dayKey(d) {
+          return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        }
+        const byDay = new Map();
+        pts.forEach(p => {
+          const d = new Date(p.ts);
+          const key = dayKey(d);
+          if (!byDay.has(key)) byDay.set(key, []);
+          byDay.get(key).push({ ts: p.ts, equity: p.equity, date: d });
+        });
+        const sortedDays = Array.from(byDay.keys()).sort();
+        const dayPoints = [];
+        sortedDays.forEach(k => {
+          const list = byDay.get(k).sort((a, b) => new Date(a.ts) - new Date(b.ts));
+          const firstDate = list[0].date;
+          const rebalanceTs = new Date(firstDate.getFullYear(), firstDate.getMonth(), firstDate.getDate(), rbH, rbM, 0);
+          let rebalPoint = list.reduce((best, p) => {
+            const dist = Math.abs(new Date(p.ts) - rebalanceTs);
+            return (!best || dist < best.dist) ? { point: p, dist } : best;
+          }, null);
+          if (!rebalPoint) rebalPoint = { point: list[0] };
+          const lastPoint = list[list.length - 1];
+          dayPoints.push(rebalPoint.point);
+          if (rebalPoint.point !== lastPoint) dayPoints.push(lastPoint);
+          else dayPoints.push({ ts: lastPoint.ts, equity: lastPoint.equity });
+        });
+        const now = new Date();
+        const todayKey = dayKey(now);
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayKey = dayKey(yesterday);
+        if (dayPoints.length > 0 && sortedDays[0] === todayKey && !byDay.has(yesterdayKey)) {
+          const firstEquity = dayPoints[0].equity;
+          dayPoints.unshift(
+            { ts: yesterday.toISOString().slice(0,10) + 'T' + String(rbH).padStart(2,'0') + ':' + String(rbM).padStart(2,'0') + ':00.000Z', equity: firstEquity },
+            { ts: yesterday.toISOString(), equity: firstEquity }
+          );
+        }
+        const labels = dayPoints.map(p => new Date(p.ts));
+        const data = dayPoints.map(p => p.equity);
+        const subEl = document.getElementById('equity-subtitle');
+        if (subEl) subEl.textContent = usedSynthetic
+          ? 'Показано текущее значение (история накапливается каждую минуту)'
+          : 'Equity по дням';
+        if (!window.equityChart) {
+          const ctx = document.getElementById('equity-chart').getContext('2d');
+          window.equityChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels,
+              datasets: [{
+                label: 'Equity, RUB',
+                data,
+                borderColor: '#38bdf8',
+                backgroundColor: 'rgba(56,189,248,0.12)',
+                tension: 0.3,
+                pointRadius: 0,
+              }],
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: {
+                x: {
+                  type: 'time',
+                  time: { unit: 'day', displayFormats: { day: 'dd.MM', week: 'dd.MM', month: 'MM.yy' } },
+                  ticks: { color: '#9ca3af', maxTicksLimit: 31 },
+                  grid: { color: 'rgba(15,23,42,0.7)' },
+                },
+                y: {
+                  ticks: { color: '#9ca3af' },
+                  grid: { color: 'rgba(15,23,42,0.7)' },
+                },
+              },
+            },
+          });
+        } else {
+          window.equityChart.data.labels = labels;
+          window.equityChart.data.datasets[0].data = data;
+          window.equityChart.update('none');
+        }
+      } catch (e) {
+        document.getElementById('status-body').innerHTML = '<span class="status-bad">Ошибка загрузки: ' + e.message + '</span>';
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>
+""".strip()
+
+
+async def _write_response(
+  writer: asyncio.StreamWriter,
+  status: int,
+  body: bytes,
+  content_type: str = "text/plain; charset=utf-8",
+  extra_headers: Dict[str, str] | None = None,
+) -> None:
+  headers = [
+    f"HTTP/1.0 {status} {'OK' if status == 200 else 'Error'}\r\n",
+    f"Content-Type: {content_type}\r\n",
+    "Connection: close\r\n",
+    f"Content-Length: {len(body)}\r\n",
+  ]
+  if extra_headers:
+    for k, v in extra_headers.items():
+      headers.append(f"{k}: {v}\r\n")
+  headers.append("\r\n")
+  writer.write("".join(headers).encode("utf-8"))
+  writer.write(body)
+  await writer.drain()
+  try:
+    writer.close()
+    await writer.wait_closed()
+  except Exception:
+    pass
+
+
+def _now_msk_iso() -> str:
+  """Текущее время в МСК в формате ISO (для дашборда)."""
+  try:
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("Europe/Moscow")).isoformat()
+  except Exception:
+    return datetime.now().isoformat()
+
+
+def _timezone_info(cfg: "AppConfig | None") -> tuple[str, str, str]:
+  """Возвращает (server_time_iso, trading_timezone, window_time_iso)."""
+  server_now = datetime.now()
+  server_iso = server_now.isoformat()
+  tz_name = ""
+  if cfg and getattr(getattr(cfg, "portfolio", None), "trading_timezone", None):
+    tz_name = (getattr(cfg.portfolio, "trading_timezone", "") or "").strip()
+  if not tz_name:
+    return server_iso, "", server_iso
+  try:
+    from zoneinfo import ZoneInfo
+    window_now = datetime.now(ZoneInfo(tz_name))
+    return server_iso, tz_name, window_now.isoformat()
+  except Exception:
+    return server_iso, tz_name, server_iso
+
+
+def _load_status_snapshot() -> Dict[str, Any] | None:
+  """Снимок статуса из основного цикла (актуальные PnL и просадка)."""
+  try:
+    from pathlib import Path
+    snap_file = Path(__file__).resolve().parent / "data" / "status_snapshot.json"
+    if not snap_file.exists():
+      return None
+    data = json.loads(snap_file.read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+      return data
+  except Exception:
+    pass
+  return None
+
+
+def _status_trading_date(cfg: "AppConfig | None") -> date:
+  """Календарная дата «торгового дня» для метрик (как в portfolio.trading_timezone)."""
+  try:
+    from zoneinfo import ZoneInfo
+    tz_name = (getattr(cfg.portfolio, "trading_timezone", None) or "").strip() if cfg else ""
+    if tz_name:
+      return datetime.now(ZoneInfo(tz_name)).date()
+  except Exception:
+    pass
+  return date.today()
+
+
+def _daily_pnl_and_drawdown_from_history(equity_now: float, cfg: "AppConfig | None") -> tuple[float, float]:
+  """Дневной PnL и просадка (%) по data/equity_history.jsonl, если нет status_snapshot."""
+  from .equity_history import load_equity_history
+  target = _status_trading_date(cfg)
+  try:
+    pts = load_equity_history(limit=3000)
+  except Exception:
+    return 0.0, 0.0
+  if not pts:
+    return 0.0, 0.0
+  day_start: float | None = None
+  peak = 0.0
+  for p in pts:
+    try:
+      ts_raw = (p.ts or "").strip()
+      if not ts_raw:
+        continue
+      if ts_raw.endswith("Z"):
+        dt = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+      else:
+        dt = datetime.fromisoformat(ts_raw)
+      if dt.tzinfo is not None:
+        try:
+          from zoneinfo import ZoneInfo
+          tz_name = (getattr(cfg.portfolio, "trading_timezone", None) or "").strip() if cfg else ""
+          if tz_name:
+            dt = dt.astimezone(ZoneInfo(tz_name))
+          else:
+            dt = dt.astimezone().replace(tzinfo=None)
+        except Exception:
+          dt = dt.astimezone().replace(tzinfo=None)
+      d = dt.date()
+    except Exception:
+      continue
+    if d == target and day_start is None:
+      day_start = p.equity
+    peak = max(peak, p.equity)
+  peak = max(peak, equity_now)
+  if day_start is None:
+    day_start = equity_now
+  daily_pnl = equity_now - day_start
+  dd_pct = ((peak - equity_now) / peak * 100.0) if peak > 1e-9 else 0.0
+  return daily_pnl, round(dd_pct, 2)
+
+
+async def _handle_api_status(
+  broker: "TinkoffBroker | None",
+  cfg: "AppConfig | None",
+  is_ready: Callable[[], bool] = lambda: True,
+  get_started_at: Callable[[], "datetime | None"] = lambda: None,
+) -> Dict[str, Any]:
+  """Безопасный статус для дашборда: при любой ошибке возвращает заглушку, а не 500."""
+  try:
+    from .risk import RiskManager
+    cash = 0.0
+    equity = 0.0
+    positions_count = 0
+    daily_pnl = 0.0
+    drawdown_pct = 0.0
+    trading_allowed = True
+    updated_at = _now_msk_iso()
+    snap = _load_status_snapshot()
+    if snap:
+      equity = float(snap.get("equity", 0))
+      cash = float(snap.get("cash", 0))
+      positions_count = int(snap.get("positions_count", 0))
+      daily_pnl = float(snap.get("daily_pnl", 0))
+      drawdown_pct = float(snap.get("drawdown_pct", 0))
+      trading_allowed = bool(snap.get("trading_allowed", True))
+      updated_at = str(snap.get("updated_at", updated_at))
+    elif broker and cfg:
+      try:
+        equity, cash, positions = broker.get_equity_snapshot(cfg.portfolio.base_currency)
+        positions_count = len(positions)
+        daily_pnl, drawdown_pct = _daily_pnl_and_drawdown_from_history(equity, cfg)
+        rm = RiskManager(cfg.risk)
+        day_start_est = equity - daily_pnl
+        state = rm.update_equity(equity, day_start_est)
+        trading_allowed = cfg.portfolio.trading_enabled and rm.is_trading_allowed(state)
+      except Exception as e:
+        logger.debug("api_status: broker/risk error: %s", e)
+    mode = "sandbox"
+    sandbox = True
+    if cfg:
+      mode = getattr(cfg, "mode", "sandbox")
+      sandbox = bool(getattr(cfg.tinkoff, "use_sandbox", True))
+    try:
+      from importlib import metadata
+      version = metadata.version("tinkoff_bot")
+    except Exception:
+      version = "0.1.0"
+    robot_running = is_ready() if callable(is_ready) else True
+    started_at = get_started_at() if callable(get_started_at) else None
+    uptime_seconds = int((datetime.now() - started_at).total_seconds()) if started_at and robot_running else 0
+    rebalance_time = "10:00"
+    if cfg and getattr(cfg.portfolio, "rebalance_time", None):
+      rebalance_time = str(cfg.portfolio.rebalance_time).strip() or "10:00"
+    server_time_iso, trading_timezone, window_time_iso = _timezone_info(cfg)
+    return {
+      "version": version,
+      "mode": mode,
+      "sandbox": sandbox,
+      "robot_running": robot_running,
+      "uptime_seconds": uptime_seconds,
+      "equity": equity,
+      "cash": cash,
+      "positions_count": positions_count,
+      "daily_pnl": daily_pnl,
+      "drawdown_pct": drawdown_pct,
+      "trading_allowed": trading_allowed,
+      "updated_at": updated_at,
+      "rebalance_time": rebalance_time,
+      "server_time_iso": server_time_iso,
+      "trading_timezone": trading_timezone,
+      "window_time_iso": window_time_iso,
+    }
+  except Exception as e:
+    logger.debug("api_status: fatal error: %s", e)
+    server_time_iso, trading_timezone, window_time_iso = _timezone_info(cfg)
+    return {
+      "version": "0.1.0",
+      "mode": "sandbox",
+      "sandbox": True,
+      "robot_running": False,
+      "uptime_seconds": 0,
+      "equity": 0.0,
+      "cash": 0.0,
+      "positions_count": 0,
+      "daily_pnl": 0.0,
+      "drawdown_pct": 0.0,
+      "trading_allowed": False,
+      "updated_at": _now_msk_iso(),
+      "rebalance_time": "10:00",
+      "server_time_iso": server_time_iso,
+      "trading_timezone": trading_timezone,
+      "window_time_iso": window_time_iso,
+    }
+
+
+async def _handle_api_portfolio(broker: "TinkoffBroker | None", cfg: "AppConfig | None") -> Dict[str, Any]:
+  from .learned_params import load_learned_params, get_effective_strategy, get_effective_target_weight
+  instruments: list[Dict[str, Any]] = []
+  if not broker or not cfg:
+    return {"instruments": instruments}
+  try:
+    _, _, positions = broker.get_equity_snapshot(cfg.portfolio.base_currency)
+    by_figi = {i.figi: i for i in cfg.instruments}
+    learned = load_learned_params()
+    for figi, pos in positions.items():
+      ins = by_figi.get(figi)
+      ticker = getattr(ins, "ticker", figi) if ins else figi
+      target_weight = 0.0
+      strategy = ""
+      if ins:
+        target_weight = get_effective_target_weight(ins, learned)
+        strategy = str(get_effective_strategy(ins, learned, None))
+      instruments.append({
+        "figi": figi,
+        "ticker": ticker,
+        "quantity": pos.quantity,
+        "price": pos.current_price,
+        "value": pos.value,
+        "target_weight": float(target_weight),
+        "strategy": strategy,
+      })
+  except Exception:
+    pass
+  return {"instruments": instruments}
+
+
+async def _handle_api_equity() -> Dict[str, Any]:
+  from .equity_history import load_equity_history
+  # ~1 точка/мин → 3000 точек ≈ 2+ дня для графика по дням
+  points = load_equity_history(limit=3000)
+  return {
+    "points": [
+      {"ts": p.ts, "equity": p.equity, "cash": p.cash, "positions": p.positions}
+      for p in points
+    ]
+  }
+
+
+async def handle_health(
+  reader: asyncio.StreamReader,
+  writer: asyncio.StreamWriter,
+  broker: "TinkoffBroker | None",
+  cfg: "AppConfig | None",
+  is_ready: Callable[[], bool],
+  get_started_at: Callable[[], "datetime | None"] = lambda: None,
+) -> None:
+  """Обработчик запросов: GET /health или GET / -> JSON; GET /metrics -> Prometheus."""
+  try:
+    data = await asyncio.wait_for(reader.read(1024), timeout=2.0)
+    line = data.decode("utf-8", errors="ignore").split("\r\n")[0]
+    # Маршрутизация по простому HTTP-line
+    if "GET /metrics" in line:
+      try:
+        from prometheus_client import generate_latest
+        body = generate_latest()
+        if not isinstance(body, bytes):
+          body = body.encode("utf-8")
+        await _write_response(writer, 200, body, "text/plain; charset=utf-8")
+      except Exception as e:
+        logger.debug("Metrics generation error: %s", e)
+        await _write_response(writer, 500, b"")
+      return
+    if "GET /dashboard" in line or "GET / " in line and "/api/" not in line and "/health" not in line:
+      await _write_response(
+        writer, 200, DASHBOARD_HTML.encode("utf-8"),
+        "text/html; charset=utf-8",
+        extra_headers={"Cache-Control": "no-store, no-cache"},
+      )
+      return
+    if "GET /api/status" in line:
+      body_obj = await _handle_api_status(broker, cfg, is_ready, get_started_at)
+      body = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
+      await _write_response(writer, 200, body, "application/json; charset=utf-8", extra_headers={"Cache-Control": "no-store, no-cache"})
+      return
+    if "GET /api/portfolio" in line:
+      try:
+        body_obj = await _handle_api_portfolio(broker, cfg)
+      except Exception as e:
+        logger.debug("api/portfolio error: %s", e)
+        body_obj = {"instruments": []}
+      body = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
+      await _write_response(writer, 200, body, "application/json; charset=utf-8", extra_headers={"Cache-Control": "no-store, no-cache"})
+      return
+    if "GET /api/equity" in line:
+      try:
+        body_obj = await _handle_api_equity()
+      except Exception as e:
+        logger.debug("api/equity error: %s", e)
+        body_obj = {"points": []}
+      body = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
+      await _write_response(writer, 200, body, "application/json; charset=utf-8", extra_headers={"Cache-Control": "no-store, no-cache"})
+      return
+    if "GET /health" in line:
+      broker_ok = False
+      if broker:
+        try:
+          broker.get_cash_balance(currency=(cfg.portfolio.base_currency if cfg else "RUB"))
+          broker_ok = True
+        except Exception:
+          pass
+      config_ok = cfg is not None
+      ready = is_ready() if callable(is_ready) else True
+      status = 200 if (broker_ok and config_ok) else 503
+      body = json.dumps({"broker_ok": broker_ok, "config_ok": config_ok, "ready": ready}, ensure_ascii=False).encode("utf-8")
+      await _write_response(writer, status, body, "application/json; charset=utf-8")
+      return
+    # Всё остальное — 404
+    await _write_response(writer, 404, b"Not found")
+  except Exception as e:
+    logger.debug("Health check error: %s", e)
+    try:
+      await _write_response(writer, 500, b"")
+    except Exception:
+      pass
+
+
+async def run_health_server(
+  host: str,
+  port: int,
+  broker: "TinkoffBroker | None",
+  cfg: "AppConfig | None",
+  is_ready: Callable[[], bool] = lambda: True,
+  get_started_at: Callable[[], "datetime | None"] = lambda: None,
+) -> asyncio.Server:
+  """Запустить TCP-сервер для /health."""
+  server = await asyncio.start_server(
+    lambda r, w: handle_health(r, w, broker, cfg, is_ready, get_started_at),
+    host=host,
+    port=port,
+  )
+  return server
