@@ -62,6 +62,14 @@ def update_pauses(consecutive_per_figi: dict, threshold: int, pause_hours: float
   paused: list[str] = []
   for figi, c in consecutive_per_figi.items():
     if c >= threshold:
+      current_until = data.get(figi)
+      if current_until:
+        try:
+          if datetime.fromisoformat(current_until) > now:
+            # Already paused: keep current value and skip duplicate alert.
+            continue
+        except Exception:
+          pass
       data[figi] = until
       paused.append(figi)
   if paused:
