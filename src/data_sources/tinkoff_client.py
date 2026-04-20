@@ -547,7 +547,10 @@ class TinkoffClient:
         """
         try:
             if hasattr(self.client, 'clear_sandbox'):
-                self.client.clear_sandbox()
+                await self._call_with_retry(
+                    lambda: self.client.clear_sandbox(),
+                    "clear_sandbox"
+                )
                 self.logger.info("✅ Счет песочницы очищен")
             else:
                 self.logger.warning("⚠️ Метод очистки песочницы не найден")

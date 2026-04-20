@@ -20,8 +20,10 @@ class TelegramBot:
         self.trade_history = []
         self.is_active = False
         self.last_messages: Dict[str, float] = {}
+        self.last_error_messages: Dict[str, float] = {}
         self.default_message_cooldown_sec = 30
         self.pause_message_cooldown_sec = 300
+        self.error_message_cooldown_sec = 300
         self._register_handlers()
     
     def _register_handlers(self):
@@ -221,6 +223,17 @@ class TelegramBot:
     
     async def send_error_notification(self, error: str, context: str = ""):
         """Send error notification"""
+        if not self.is_active:
+            self.logger.debug("Telegram error notification skipped: bot is inactive")
+            return
+
+        error_key = f"{context}|{error}"
+        now = time.time()
+        last_error_at = self.last_error_messages.get(error_key)
+        if last_error_at and (now - last_error_at) < self.error_message_cooldown_sec:
+            self.logger.info("Telegram duplicate error notification skipped by cooldown")
+            return
+
         text = (
             f"❌ <b>ОШИБКА</b>\n"
             f"───────────────\n"
@@ -229,4 +242,5 @@ class TelegramBot:
             f"⏰ <b>Время:</b> {datetime.now().strftime('%H:%M:%S')}\n"
             f"───────────────"
         )
+        self.last_error_messages[error_key] = now
         await self.send_message(text)
