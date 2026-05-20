@@ -53,25 +53,46 @@ def clear_pause(figi: str) -> None:
     _save(data)
 
 
+def _parse_until(iso: str) -> datetime | None:
+  if not iso:
+    return None
+  s = iso.strip().replace("Z", "+00:00")
+  try:
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is not None:
+      dt = dt.replace(tzinfo=None)
+    return dt
+  except Exception:
+    return None
+
+
 def update_pauses(consecutive_per_figi: dict, threshold: int, pause_hours: float) -> list[str]:
-  """Установить паузу по figi, где consecutive >= threshold. Возвращает список figi, по которым пауза установлена в этом вызове."""
+  """Установить паузу по figi, где consecutive >= threshold.
+
+  Возвращает figi, по которым пауза впервые включена в этом вызове (без повторных алертов).
+  """
   from datetime import timedelta
   now = datetime.now()
   until = (now + timedelta(hours=pause_hours)).isoformat()
   data = _load()
   paused: list[str] = []
+  dirty = False
   for figi, c in consecutive_per_figi.items():
-    if c >= threshold:
-      current_until = data.get(figi)
-      if current_until:
-        try:
-          if datetime.fromisoformat(current_until) > now:
-            # Already paused: keep current value and skip duplicate alert.
-            continue
-        except Exception:
-          pass
-      data[figi] = until
-      paused.append(figi)
-  if paused:
+    if c < threshold:
+      continue
+    current_until = data.get(figi)
+    if current_until:
+      until_dt = _parse_until(current_until)
+      if until_dt is not None and until_dt > now:
+        continue
+      if until_dt is None:
+        # Битая дата в файле — обновить срок без нового уведомления.
+        data[figi] = until
+        dirty = True
+        continue
+    data[figi] = until
+    paused.append(figi)
+    dirty = True
+  if dirty:
     _save(data)
   return paused

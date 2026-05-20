@@ -1258,7 +1258,8 @@ async def main() -> None:
                 force=True,
               )
 
-        if inst_pause_after > 0:
+        # Пауза по убыткам — только при активной торговле (не при «Стоп», даже с auto_rebalance_when_stopped).
+        if inst_pause_after > 0 and started:
           try:
             from tinkoff_bot.trade_history import get_consecutive_losses_per_figi
             from tinkoff_bot.instrument_pause import update_pauses
@@ -1268,7 +1269,11 @@ async def main() -> None:
             if paused_figi:
               figi_to_ticker = {i.figi: i.ticker for i in cfg.instruments}
               tickers = [figi_to_ticker.get(f, f) for f in paused_figi]
-              await send_alert(tg, f"⏸ Пауза по инструментам (серия убытков ≥{inst_pause_after}): {', '.join(tickers)}", "instrument_pause", force=True)
+              await send_alert(
+                tg,
+                f"⏸ Пауза по инструментам (серия убытков ≥{inst_pause_after}): {', '.join(tickers)}",
+                "instrument_pause",
+              )
           except Exception:
             pass
 
