@@ -728,8 +728,8 @@ class PortfolioManager:
       _log_rebalance_decisions(equity, rebalance_log_entries, all_orders)
     return all_orders
 
-  def execute_rebalance(self, day_start_equity: float) -> List[dict]:
-    orders = self.build_rebalance_orders(day_start_equity)
+  def execute_rebalance(self, day_start_equity: float, planned_orders: Optional[List[RebalanceOrder]] = None) -> List[dict]:
+    orders = planned_orders if planned_orders is not None else self.build_rebalance_orders(day_start_equity)
     trades: List[dict] = []
     dry_run = getattr(self.cfg, "dry_run", False)
     base_currency = getattr(self.cfg, "base_currency", "RUB") or "RUB"
@@ -821,7 +821,6 @@ class PortfolioManager:
           "commission": 0,
           "strategy": o.strategy_used or "",
         })
-        _save_last_trade(o.figi)
         continue
       order_id = None
       executed_qty = 0
@@ -935,17 +934,18 @@ class PortfolioManager:
         "commission": commission,
         "strategy": o.strategy_used or "",
       })
-    for t in trades:
-      try:
-        from .trade_history import record_trade
-        side = "buy" if "ПОКУПКА" in t.get("direction", "") else "sell"
-        record_trade(
-          t["figi"], t["ticker"], side,
-          float(t["quantity"]), float(t["price"]),
-          t.get("strategy", ""),
-          expected_price=t.get("expected_price"),
-        )
-      except Exception as e:
-        logger.warning("trade_history.record_trade: %s", e)
+    if not dry_run:
+      for t in trades:
+        try:
+          from .trade_history import record_trade
+          side = "buy" if "ПОКУПКА" in t.get("direction", "") else "sell"
+          record_trade(
+            t["figi"], t["ticker"], side,
+            float(t["quantity"]), float(t["price"]),
+            t.get("strategy", ""),
+            expected_price=t.get("expected_price"),
+          )
+        except Exception as e:
+          logger.warning("trade_history.record_trade: %s", e)
     return trades
 

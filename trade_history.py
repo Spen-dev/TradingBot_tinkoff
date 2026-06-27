@@ -107,29 +107,33 @@ def evaluate_realized_pnl(
   get_price: Callable[[str], float],
   horizon_days: int = 5,
 ) -> List[tuple]:
-  """По сделкам старше horizon_days вычислить реализованный PnL (цена входа vs текущая цена).
-  get_price(figi) -> float. Возвращает список (trade, pnl_rub)."""
+  """PnL по сделкам: mark-to-market на текущей цене.
+
+  horizon_days > 0: только сделки не моложе horizon_days (зрелость для статистики).
+  horizon_days <= 0: все сделки (для серии убытков и оперативных проверок).
+  """
   from datetime import datetime as dt
   now = dt.now()
-  cutoff = (now - timedelta(days=horizon_days)).isoformat()
+  min_age_cutoff = (now - timedelta(days=horizon_days)).isoformat() if horizon_days > 0 else None
   result = []
   for t in trades:
-    if t.ts < cutoff:
-      try:
-        current_price = get_price(t.figi)
-        if t.side == "buy":
-          pnl = (current_price - t.price) * t.quantity
-        else:
-          pnl = (t.price - current_price) * t.quantity
-        result.append((t, pnl))
-      except Exception:
-        pass
+    if min_age_cutoff is not None and t.ts > min_age_cutoff:
+      continue
+    try:
+      current_price = get_price(t.figi)
+      if t.side == "buy":
+        pnl = (current_price - t.price) * t.quantity
+      else:
+        pnl = (t.price - current_price) * t.quantity
+      result.append((t, pnl))
+    except Exception:
+      pass
   return result
 
 
 def get_consecutive_losses(
   get_price: Callable[[str], float],
-  horizon_days: int = 5,
+  horizon_days: int = 0,
   max_trades: int = 50,
   min_pnl_rub: float = 0.0,
 ) -> int:
@@ -198,7 +202,7 @@ def get_per_instrument_stats(
 
 def get_consecutive_losses_per_figi(
   get_price: Callable[[str], float],
-  horizon_days: int = 10,
+  horizon_days: int = 0,
   min_pnl_rub: float = 0.0,
 ) -> Dict[str, int]:
   """По каждому figi: число подряд убыточных сделок (для блокировки инструмента)."""

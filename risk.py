@@ -19,33 +19,49 @@ class RiskState:
   daily_pnl: float
 
 
-def _load_pause_until() -> datetime | None:
+def _load_risk_state() -> dict:
   if not RISK_STATE_FILE.exists():
-    return None
+    return {}
   try:
     import json
-    data = json.loads(RISK_STATE_FILE.read_text(encoding="utf-8"))
-    s = data.get("pause_until")
-    if s:
-      return datetime.fromisoformat(s)
+    return json.loads(RISK_STATE_FILE.read_text(encoding="utf-8"))
   except Exception as e:
     logger.debug("risk_state load: %s", e)
-  return None
+    return {}
 
 
-def _save_pause_until(until: datetime | None) -> None:
+def _save_risk_state(
+  pause_until: datetime | None,
+  max_equity_seen: float,
+  daily_equity_start: float | None,
+) -> None:
   RISK_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
   import json
-  data = {"pause_until": until.isoformat() if until else None}
+  data = {
+    "pause_until": pause_until.isoformat() if pause_until else None,
+    "max_equity_seen": max_equity_seen,
+    "daily_equity_start": daily_equity_start,
+  }
   RISK_STATE_FILE.write_text(json.dumps(data), encoding="utf-8")
 
 
 class RiskManager:
   def __init__(self, cfg: RiskConfig):
     self.cfg = cfg
-    self._max_equity_seen = 0.0
-    self._daily_equity_start = None
-    self._pause_until = _load_pause_until()
+    data = _load_risk_state()
+    self._max_equity_seen = float(data.get("max_equity_seen") or 0.0)
+    des = data.get("daily_equity_start")
+    self._daily_equity_start = float(des) if des is not None else None
+    self._pause_until = None
+    pause_s = data.get("pause_until")
+    if pause_s:
+      try:
+        self._pause_until = datetime.fromisoformat(pause_s)
+      except Exception:
+        self._pause_until = None
+
+  def _persist(self) -> None:
+    _save_risk_state(self._pause_until, self._max_equity_seen, self._daily_equity_start)
 
   def update_equity(self, equity: float, day_start_equity: float) -> RiskState:
     if self._max_equity_seen == 0.0:
@@ -54,11 +70,13 @@ class RiskManager:
     if self._daily_equity_start is None:
       self._daily_equity_start = day_start_equity
     daily_pnl = equity - self._daily_equity_start
+    self._persist()
     return RiskState(equity=equity, max_equity_seen=self._max_equity_seen, daily_pnl=daily_pnl)
 
   def reset_daily(self, new_day_start: float) -> None:
     """Сброс дневного старта (например в полночь)."""
     self._daily_equity_start = new_day_start
+    self._persist()
 
   def reset_equity_baseline(self, equity: float) -> None:
     """Полный сброс базового equity (для sandbox reset / смены счёта).
@@ -67,11 +85,12 @@ class RiskManager:
     """
     self._max_equity_seen = equity
     self._daily_equity_start = equity
+    self._persist()
 
   def set_pause_until(self, hours: float) -> None:
     """Вручную установить паузу на N часов (например из Telegram /pause)."""
     self._pause_until = datetime.now() + timedelta(hours=hours)
-    _save_pause_until(self._pause_until)
+    self._persist()
 
   def update_consecutive_losses(self, count: int) -> bool:
     """Вызвать с числом подряд убыточных сделок; при count >= N включает паузу на pause_hours. Возвращает True если пауза только что включена."""
@@ -79,11 +98,11 @@ class RiskManager:
     if pause_after <= 0 or count < pause_after:
       if self._pause_until and datetime.now() > self._pause_until:
         self._pause_until = None
-        _save_pause_until(None)
+        self._persist()
       return False
     pause_hours = getattr(self.cfg, "pause_hours", 24) or 24
     self._pause_until = datetime.now() + timedelta(hours=pause_hours)
-    _save_pause_until(self._pause_until)
+    self._persist()
     return True
 
   def get_pause_until(self) -> datetime | None:
@@ -129,7 +148,7 @@ class RiskManager:
       return False
     if self._pause_until and datetime.now() >= self._pause_until:
       self._pause_until = None
-      _save_pause_until(None)
+      self._persist()
     if self._max_equity_seen <= 0:
       return True
     drawdown = (self._max_equity_seen - state.equity) / max(self._max_equity_seen, 1e-9)
@@ -180,4 +199,3 @@ class RiskManager:
     frac = (b * p - q) / b if b > 0 else 0.0
     frac = max(0.0, min(frac, 1.0))
     return min(frac, self.cfg.kelly_fraction_cap)
-

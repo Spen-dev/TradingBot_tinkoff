@@ -17,6 +17,7 @@ from .learned_params import (
   load_learned_params,
   save_learned_params,
   get_effective_params,
+  LEARNED_META_KEYS,
 )
 from .strategy import Signal, build_strategy
 from .strategy_names import AI_STRATEGY, is_ai_strategy, normalize_strategy_name
@@ -24,17 +25,7 @@ from .strategy_names import AI_STRATEGY, is_ai_strategy, normalize_strategy_name
 logger = logging.getLogger(__name__)
 
 # Ключи из learned_params, которые не являются параметрами стратегии для build_strategy
-_LEARNED_META_KEYS = frozenset({
-  "strategy",
-  "strategy_trend",
-  "strategy_range",
-  "strategy_weak_trend",
-  "target_weight",
-  "retrain_info",
-  "params_trend",
-  "params_range",
-  "params_weak_trend",
-})
+_LEARNED_META_KEYS = LEARNED_META_KEYS
 
 
 def _strategy_params_only(merged_params: Dict[str, Any]) -> Dict[str, Any]:
@@ -750,10 +741,10 @@ def run_retrain(
           atr_period=atr_period, regime_filter="range",
         )
         def _regime_strategy_key() -> Any:
-          if isinstance(eff_raw, str):
-            return eff_raw
-          if isinstance(eff_raw, list) and eff_raw:
-            return eff_raw[0]
+          if isinstance(eff, str):
+            return eff
+          if isinstance(eff, list) and eff:
+            return eff[0]
           return tune_strategy
 
         if best_trend:
@@ -866,12 +857,19 @@ def run_retrain(
         w = min(w, weight_cap)
         learned[figi] = learned.get(figi) or {}
         learned[figi]["target_weight"] = round(w, 4)
-      figis_with_w = [f for f, _ in sharpes if learned.get(f, {}).get("target_weight") is not None]
-      ws = [learned[f]["target_weight"] for f in figis_with_w]
+      for inst in instruments:
+        if inst.figi not in figi_order and learned.get(inst.figi, {}).get("target_weight") is not None:
+          learned[inst.figi].pop("target_weight", None)
+      all_figis = [inst.figi for inst in instruments]
+      ws = []
+      for figi in all_figis:
+        inst = next(i for i in instruments if i.figi == figi)
+        tw = learned.get(figi, {}).get("target_weight", inst.target_weight)
+        ws.append(float(tw))
       if ws and abs(sum(ws) - 1.0) > 0.01:
         scale = 1.0 / sum(ws)
-        for figi in figis_with_w:
-          learned[figi]["target_weight"] = round(learned[figi]["target_weight"] * scale, 4)
+        for figi, tw in zip(all_figis, ws):
+          learned.setdefault(figi, {})["target_weight"] = round(tw * scale, 4)
       save_learned_params(learned)
       lines.append("  Веса пересчитаны по Sharpe (корреляции и реальный PnL учтены, cap=%.0f%%)." % (weight_cap * 100))
 

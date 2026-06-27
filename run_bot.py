@@ -110,6 +110,7 @@ async def main() -> None:
     openrouter_cfg=getattr(cfg, "openrouter", None),
   )
   broker_timeout = max(5.0, float(getattr(cfg.portfolio, "request_timeout_seconds", 30) or 30))
+  rebalance_lock = asyncio.Lock()
 
   fallback_alert_last_date: date | None = None
 
@@ -425,121 +426,125 @@ async def main() -> None:
       return OnRebalanceResult(msg, False, drift)
 
     nonlocal day_start_equity, last_trade_time, awaiting_real_confirm, real_trade_confirmed
-    logger.info("Ребаланс (%s): вызов", source)
-    if not config_valid:
-      msg = "⚠️ Ошибки конфига — торговля заблокирована. Ребаланс не выполнен."
-      await send_alert(tg, msg, "config_error", force=True)
-      return _out(msg, False, False)
-    try:
-      mode = getattr(cfg, "mode", "sandbox") or "sandbox"
-      dry_run = getattr(cfg.portfolio, "dry_run", True)
-      if mode == "real" and not dry_run and not real_trade_confirmed:
-        awaiting_real_confirm = True
-        await send_alert(tg, "Подтвердите включение реальной торговли? Ответьте Да в чат для подтверждения.", "real_confirm", force=True)
-        return _out(
-          "Ожидание подтверждения. Ответьте Да в чат для включения реальной торговли.",
-          False,
-          False,
-        )
-      equity, cash, npos = compute_equity()
-      maybe_reset_equity_baseline(equity, cash, npos)
-      if day_start_equity is None:
-        day_start_equity = equity
-      st = risk.update_equity(equity, day_start_equity or 0)
-      if not risk.is_trading_allowed(st):
-        reason = risk.get_block_reason(st)
-        msg = f"⚠️ Торговля запрещена: {reason or 'риск-лимиты'}. Ребаланс не выполнен."
-        if equity == 0 and (day_start_equity or 0) > 0:
-          msg += " (equity=0 — проверьте доступ к брокеру.)"
-        if reason and "пауза" in reason:
-          msg += " Сброс: /pause 0"
-        await send_alert(tg, msg, "trading_blocked", force=True)
+    async with rebalance_lock:
+      logger.info("Ребаланс (%s): вызов", source)
+      if not config_valid:
+        msg = "⚠️ Ошибки конфига — торговля заблокирована. Ребаланс не выполнен."
+        await send_alert(tg, msg, "config_error", force=True)
         return _out(msg, False, False)
-      now_window = _now_for_window()
-      now_mins = now_window.hour * 60 + now_window.minute
-      lo, hi = cfg.portfolio.rebalance_day_minutes_window()
-      in_window = lo <= now_mins <= hi
-      prefix = ""
-      if not trading_enabled:
-        orders = pm.build_rebalance_orders(day_start_equity or 0)
-        await send_alert(
-          tg,
-          f"📋 Режим мониторинга: было бы заявок {len(orders)} (заявки не выставлены)",
-          "monitoring",
-          force=True,
-        )
-        if not in_window:
-          prefix = "⚠️ Сейчас вне торгового окна. "
-        return _out(prefix + f"Мониторинг: заявок не выставлено (было бы {len(orders)})", True, True)
-      if not in_window:
-        # Торговля включена, но сейчас вне торгового окна — ручной ребаланс не выполняем.
-        return _out("⚠️ Сейчас вне торгового окна. Ребаланс не выполняется.", False, False)
       try:
-        from tinkoff_bot.trade_history import get_consecutive_losses
-        min_pnl = getattr(cfg.risk, "min_pnl_to_count_loss_rub", 0.0) or 0.0
-        consecutive = get_consecutive_losses(broker.get_last_price, horizon_days=5, min_pnl_rub=min_pnl)
-        pause_set = pm.risk.update_consecutive_losses(consecutive)
-        if pause_set:
-          ph = getattr(cfg.risk, "pause_hours", 24) or 24
+        mode = getattr(cfg, "mode", "sandbox") or "sandbox"
+        dry_run = getattr(cfg.portfolio, "dry_run", True)
+        if mode == "real" and not dry_run and not real_trade_confirmed:
+          awaiting_real_confirm = True
+          await send_alert(tg, "Подтвердите включение реальной торговли? Ответьте Да в чат для подтверждения.", "real_confirm", force=True)
+          return _out(
+            "Ожидание подтверждения. Ответьте Да в чат для включения реальной торговли.",
+            False,
+            False,
+          )
+        equity, cash, npos = compute_equity()
+        maybe_reset_equity_baseline(equity, cash, npos)
+        if day_start_equity is None:
+          day_start_equity = equity
+        st = risk.update_equity(equity, day_start_equity or 0)
+        if not risk.is_trading_allowed(st):
+          reason = risk.get_block_reason(st)
+          msg = f"⚠️ Торговля запрещена: {reason or 'риск-лимиты'}. Ребаланс не выполнен."
+          if equity == 0 and (day_start_equity or 0) > 0:
+            msg += " (equity=0 — проверьте доступ к брокеру.)"
+          if reason and "пауза" in reason:
+            msg += " Сброс: /pause 0"
+          await send_alert(tg, msg, "trading_blocked", force=True)
+          return _out(msg, False, False)
+        now_window = _now_for_window()
+        now_mins = now_window.hour * 60 + now_window.minute
+        lo, hi = cfg.portfolio.rebalance_day_minutes_window()
+        in_window = lo <= now_mins <= hi
+        prefix = ""
+        if not trading_enabled:
+          orders = pm.build_rebalance_orders(day_start_equity or 0)
           await send_alert(
             tg,
-            f"⏸ Торговля приостановлена на {ph:.0f} ч из-за серии убытков ({consecutive} подряд).",
-            "pause",
+            f"📋 Режим мониторинга: было бы заявок {len(orders)} (заявки не выставлены)",
+            "monitoring",
             force=True,
           )
-      except Exception:
-        pass
-      # Логируем рассчитанные заявки, чтобы отличать "нет отклонений" от "не удалось выставить".
-      try:
-        planned_orders = pm.build_rebalance_orders(day_start_equity or 0)
+          if not in_window:
+            prefix = "⚠️ Сейчас вне торгового окна. "
+          return _out(prefix + f"Мониторинг: заявок не выставлено (было бы {len(orders)})", False, False)
+        if not in_window:
+          return _out("⚠️ Сейчас вне торгового окна. Ребаланс не выполняется.", False, False)
+        try:
+          from tinkoff_bot.trade_history import get_consecutive_losses
+          min_pnl = getattr(cfg.risk, "min_pnl_to_count_loss_rub", 0.0) or 0.0
+          consecutive = get_consecutive_losses(broker.get_last_price, horizon_days=0, min_pnl_rub=min_pnl)
+          pause_set = pm.risk.update_consecutive_losses(consecutive)
+          if pause_set:
+            ph = getattr(cfg.risk, "pause_hours", 24) or 24
+            await send_alert(
+              tg,
+              f"⏸ Торговля приостановлена на {ph:.0f} ч из-за серии убытков ({consecutive} подряд).",
+              "pause",
+              force=True,
+            )
+        except Exception:
+          pass
+        try:
+          planned_orders = pm.build_rebalance_orders(day_start_equity or 0)
+        except Exception as e:
+          planned_orders = None
+          logger.debug("build_rebalance_orders failed: %s", e)
+        logger.info(
+          "Ребаланс (%s): planned_orders=%s, dry_run=%s, equity=%.2f, cash=%.2f, positions=%d",
+          source,
+          len(planned_orders) if planned_orders is not None else "?",
+          dry_run,
+          equity,
+          cash,
+          npos,
+        )
+        loop = asyncio.get_running_loop()
+        po = planned_orders
+        trades = await loop.run_in_executor(
+          None,
+          lambda po=planned_orders: pm.execute_rebalance(day_start_equity or 0, po),
+        )
+        logger.info("Ребаланс (%s): исполнение завершено, заявок=%d", source, len(trades) if trades else 0)
+        if trades:
+          dry_run = getattr(cfg.portfolio, "dry_run", False)
+          last_trade_time = datetime.now()
+          inc_trades(len(trades))
+          for idx, t in enumerate(trades):
+            await tg.send_trade_notification(
+              ticker=t["ticker"],
+              direction=t["direction"],
+              quantity=t["quantity"],
+              price=t["price"],
+              amount=t["amount"],
+              commission=t["commission"],
+              simulation=dry_run,
+            )
+            if idx + 1 < len(trades):
+              await asyncio.sleep(0.35)
+          msg = f"Выставлено заявок: {len(trades)}"
+          if dry_run:
+            msg += " (симуляция, dry-run)"
+          return _out(prefix + msg, True, True)
+        if planned_orders is None:
+          return _out(prefix + "Не удалось рассчитать заявки (см. bot.log)", False, False)
+        if not planned_orders:
+          return _out(prefix + "Заявки не нужны (нет отклонений)", True, True)
+        return _out(
+          prefix + f"Заявки не выставлены (рассчитано {len(planned_orders)}, выставлено 0 — см. bot.log)",
+          False,
+          False,
+        )
       except Exception as e:
-        planned_orders = []
-        logger.debug("build_rebalance_orders failed: %s", e)
-      logger.info(
-        "Ребаланс (%s): planned_orders=%d, dry_run=%s, equity=%.2f, cash=%.2f, positions=%d",
-        source,
-        len(planned_orders),
-        dry_run,
-        equity,
-        cash,
-        npos,
-      )
-      # Исполнение ребаланса выносим в отдельный поток, чтобы не блокировать event loop.
-      loop = asyncio.get_running_loop()
-      trades = await loop.run_in_executor(None, lambda: pm.execute_rebalance(day_start_equity or 0))
-      logger.info("Ребаланс (%s): исполнение завершено, заявок=%d", source, len(trades) if trades else 0)
-      if trades:
-        dry_run = getattr(cfg.portfolio, "dry_run", False)
-        last_trade_time = datetime.now()
-        inc_trades(len(trades))
-        for idx, t in enumerate(trades):
-          await tg.send_trade_notification(
-            ticker=t["ticker"],
-            direction=t["direction"],
-            quantity=t["quantity"],
-            price=t["price"],
-            amount=t["amount"],
-            commission=t["commission"],
-            simulation=dry_run,
-          )
-          if idx + 1 < len(trades):
-            await asyncio.sleep(0.35)
-        msg = f"Выставлено заявок: {len(trades)}"
-        if dry_run:
-          msg += " (симуляция, dry-run)"
-        return _out(prefix + msg, True, True)
-      if not planned_orders:
-        return _out(prefix + "Заявки не нужны (нет отклонений)", True, True)
-      return _out(
-        prefix + f"Заявки не выставлены (рассчитано {len(planned_orders)}, выставлено 0 — см. bot.log)",
-        True,
-        True,
-      )
-    except Exception as e:
-      inc_error()
-      logger.exception("on_rebalance: %s", e)
-      em = f"Ошибка ребаланса: {e}"
-      return OnRebalanceResult(em, False, False)
+        inc_error()
+        logger.exception("on_rebalance: %s", e)
+        em = f"Ошибка ребаланса: {e}"
+        return OnRebalanceResult(em, False, False)
 
   async def on_select_strategy() -> str:
     if getattr(cfg.portfolio, "ai_mode", False):
@@ -1024,7 +1029,6 @@ async def main() -> None:
           and cfg.tinkoff.use_sandbox
           and last_sandbox_topup_date != today
         ):
-          last_sandbox_topup_date = today
           try:
             from tinkoff_bot.ops_automation import ensure_sandbox_funded
 
@@ -1034,6 +1038,7 @@ async def main() -> None:
               lambda: ensure_sandbox_funded(broker, cfg.portfolio.base_currency),
             )
             if topup_msg:
+              last_sandbox_topup_date = today
               await send_alert(tg, f"🏦 Sandbox: {topup_msg}", "sandbox_topup", force=True)
           except Exception as e:
             logger.debug("sandbox topup: %s", e)
@@ -1148,6 +1153,15 @@ async def main() -> None:
                       logger.warning("macro index refresh: %s", e)
             except Exception:
               market_vol_level = "normal"
+          if scheduler_ok and day_start_equity is None:
+            try:
+              eq_init, _, _ = compute_equity()
+              day_start_equity = eq_init
+              risk.reset_daily(eq_init)
+              if last_day_reset_date is None:
+                last_day_reset_date = today
+            except Exception:
+              pass
           if day_start_equity is not None and last_day_reset_date is not None and today != last_day_reset_date:
             try:
               equity, _, _ = compute_equity()
@@ -1202,7 +1216,6 @@ async def main() -> None:
                     last_interval_rebalance_at = now
                   else:
                     last_rebalance_date = today
-                  last_drift_rebalance = now
                 try:
                   await send_alert(
                     tg,
@@ -1429,14 +1442,13 @@ async def main() -> None:
               await send_alert(tg, "📊 Выбор стратегий при старте:\n" + msg, "strategy_selection", force=True)
               if changes:
                 await send_alert(tg, "📊 Смена стратегий: " + ", ".join(f"{t} {o}→{n}" for t, o, n in changes), "strategy_changes", force=True)
-            except Exception as e:
-              logger.exception("Strategy selection on start: %s", e)
-            finally:
               strategy_selection_state_file.parent.mkdir(parents=True, exist_ok=True)
               strategy_selection_state_file.write_text(
                 json.dumps({"last_date": today.isoformat()}, ensure_ascii=False),
                 encoding="utf-8",
               )
+            except Exception as e:
+              logger.exception("Strategy selection on start: %s", e)
         if strategy_selection_interval_days > 0 and not getattr(cfg.portfolio, "ai_mode", False):
           last_sel_date = _strategy_selection_last_date()
           if last_sel_date is None or (today - last_sel_date).days >= strategy_selection_interval_days:

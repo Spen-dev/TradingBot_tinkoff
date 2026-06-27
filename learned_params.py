@@ -14,6 +14,19 @@ logger = logging.getLogger(__name__)
 LEARNED_DIR = Path(__file__).resolve().parent / "learned_params"
 LEARNED_FILE = LEARNED_DIR / "params.json"
 
+# Ключи learned_params, которые не являются параметрами стратегии
+LEARNED_META_KEYS = frozenset({
+  "strategy",
+  "strategy_trend",
+  "strategy_range",
+  "strategy_weak_trend",
+  "target_weight",
+  "retrain_info",
+  "params_trend",
+  "params_range",
+  "params_weak_trend",
+})
+
 
 def _ensure_dir() -> None:
   LEARNED_DIR.mkdir(parents=True, exist_ok=True)
@@ -56,7 +69,10 @@ def get_effective_params(instrument: InstrumentConfig, learned: Dict[str, Dict[s
       return {**base, **override[key]}
     if regime == "weak_trend" and override.get("params_trend"):
       return {**base, **override["params_trend"]}
-  return {**base, **override}
+  merged = {**base, **override}
+  for k in LEARNED_META_KEYS:
+    merged.pop(k, None)
+  return merged
 
 
 def get_effective_strategy(instrument: InstrumentConfig, learned: Dict[str, Dict[str, Any]], regime: str | None = None):

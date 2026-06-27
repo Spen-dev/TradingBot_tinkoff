@@ -22,14 +22,18 @@ def risk_cfg():
     )
 
 
-def test_get_block_reason_none_when_ok(risk_cfg):
+def test_get_block_reason_none_when_ok(risk_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr("tinkoff_bot.risk.RISK_STATE_FILE", tmp_path / "risk_state.json")
     rm = RiskManager(risk_cfg)
-    rm._pause_until = None  # не зависеть от risk_state.json
+    rm._pause_until = None
+    rm._max_equity_seen = 100.0
+    rm._daily_equity_start = 100.0
     state = RiskState(equity=100.0, max_equity_seen=100.0, daily_pnl=0.0)
     assert rm.get_block_reason(state) is None
 
 
-def test_get_block_reason_drawdown(risk_cfg):
+def test_get_block_reason_drawdown(risk_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr("tinkoff_bot.risk.RISK_STATE_FILE", tmp_path / "risk_state.json")
     rm = RiskManager(risk_cfg)
     rm._pause_until = None
     rm._max_equity_seen = 100.0
@@ -40,7 +44,8 @@ def test_get_block_reason_drawdown(risk_cfg):
     assert "просадка" in reason
 
 
-def test_get_block_reason_daily_loss(risk_cfg):
+def test_get_block_reason_daily_loss(risk_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr("tinkoff_bot.risk.RISK_STATE_FILE", tmp_path / "risk_state.json")
     rm = RiskManager(risk_cfg)
     rm._pause_until = None
     rm._max_equity_seen = 100.0
@@ -51,7 +56,8 @@ def test_get_block_reason_daily_loss(risk_cfg):
     assert "дневной убыток" in reason
 
 
-def test_is_trading_allowed_after_drawdown(risk_cfg):
+def test_is_trading_allowed_after_drawdown(risk_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr("tinkoff_bot.risk.RISK_STATE_FILE", tmp_path / "risk_state.json")
     rm = RiskManager(risk_cfg)
     rm._pause_until = None
     rm._max_equity_seen = 100.0
@@ -68,3 +74,13 @@ def test_stop_loss_price(risk_cfg):
 def test_trailing_stop_price(risk_cfg):
     rm = RiskManager(risk_cfg)
     assert rm.trailing_stop_price(100.0) == 98.0
+
+
+def test_risk_state_persisted(tmp_path, monkeypatch, risk_cfg):
+    state_file = tmp_path / "risk_state.json"
+    monkeypatch.setattr("tinkoff_bot.risk.RISK_STATE_FILE", state_file)
+    rm = RiskManager(risk_cfg)
+    rm.update_equity(120_000.0, 120_000.0)
+    rm2 = RiskManager(risk_cfg)
+    assert rm2._max_equity_seen == 120_000.0
+    assert rm2._daily_equity_start == 120_000.0

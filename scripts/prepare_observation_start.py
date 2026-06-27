@@ -126,6 +126,7 @@ def main() -> int:
   if args.update_baseline_only:
     baseline["baseline_corrected_at"] = datetime.now().isoformat()
     baseline["git_rev_deploy"] = _git_rev()
+    BASELINE_FILE.write_text(json.dumps(baseline, ensure_ascii=False, indent=2), encoding="utf-8")
     print("Baseline обновлён (--update-baseline-only), lock и equity старта сохранены.")
     return 0
 

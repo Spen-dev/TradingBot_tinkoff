@@ -365,6 +365,13 @@ def refresh_dynamic_portfolio(
   old_tickers = {i.ticker for i in instruments_from_state(state)} if state else set()
   new_tickers = {i.ticker for i in instruments}
   changed = old_tickers != new_tickers or not state
+  if not changed and state:
+    old_by_ticker = {i.ticker: float(i.target_weight) for i in instruments_from_state(state)}
+    for ins in instruments:
+      old_w = old_by_ticker.get(ins.ticker)
+      if old_w is not None and abs(old_w - float(ins.target_weight)) > 0.005:
+        changed = True
+        break
 
   save_state(state_path, instruments, summary=combined_summary, advisor_source=advisor_source)
   return instruments, msg, changed
