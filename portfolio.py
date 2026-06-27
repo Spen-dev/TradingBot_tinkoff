@@ -196,6 +196,7 @@ class PortfolioManager:
     finam_cfg: Any = None,
     gemini_cfg: Any = None,
     groq_cfg: Any = None,
+    openrouter_cfg: Any = None,
   ):
     self.cfg = cfg
     self.instruments_cfg = {i.figi: i for i in instruments}
@@ -204,6 +205,7 @@ class PortfolioManager:
     self.finam_cfg = finam_cfg
     self.gemini_cfg = gemini_cfg
     self.groq_cfg = groq_cfg
+    self.openrouter_cfg = openrouter_cfg
 
   def update_instruments(self, instruments: List[InstrumentConfig]) -> None:
     self.instruments_cfg = {i.figi: i for i in instruments}
@@ -284,13 +286,14 @@ class PortfolioManager:
     use_moex = getattr(self.cfg, "use_moex_advisor", True)
     use_gemini = getattr(self.cfg, "use_gemini_advisor", True)
     use_groq = getattr(self.cfg, "use_groq_advisor", True)
+    use_openrouter = getattr(self.cfg, "use_openrouter_advisor", True)
     instruments_list = list(self.instruments_cfg.values())
     has_advisor_strategy = any(
       (getattr(c, "strategy", None) == "deepseek")
       or (isinstance(getattr(c, "strategy", None), list) and "deepseek" in getattr(c, "strategy", []))
       for c in instruments_list
     )
-    if (use_deepseek or use_finam or use_moex or use_gemini or use_groq) and has_advisor_strategy:
+    if (use_deepseek or use_finam or use_moex or use_gemini or use_groq or use_openrouter) and has_advisor_strategy:
       last_prices = {}
       for figi in self.instruments_cfg:
         pos = positions.get(figi)
@@ -400,6 +403,7 @@ class PortfolioManager:
           use_moex=use_moex,
           use_gemini=use_gemini,
           use_groq=use_groq,
+          use_openrouter=use_openrouter,
           deepseek_kwargs={
             "model": getattr(self.cfg, "deepseek_model", "deepseek-chat"),
             "cache_hours": getattr(self.cfg, "deepseek_cache_hours", 0) or 0,
@@ -414,6 +418,14 @@ class PortfolioManager:
           groq_kwargs={
             "model": getattr(self.cfg, "groq_model", "llama-3.3-70b-versatile"),
             "api_key": getattr(getattr(self, "groq_cfg", None), "api_key", ""),
+            "cache_hours": llm_cache,
+            "history_summary": history_summary,
+          },
+          openrouter_kwargs={
+            "model": getattr(self.cfg, "openrouter_model", "meta-llama/llama-3.3-70b-instruct:free"),
+            "api_key": getattr(getattr(self, "openrouter_cfg", None), "api_key", ""),
+            "base_url": getattr(getattr(self, "openrouter_cfg", None), "base_url", "https://openrouter.ai/api/v1"),
+            "site_url": getattr(getattr(self, "openrouter_cfg", None), "site_url", ""),
             "cache_hours": llm_cache,
             "history_summary": history_summary,
           },

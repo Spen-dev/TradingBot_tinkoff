@@ -93,11 +93,13 @@ portfolio:
   use_moex_advisor: true      # MOEX ISS: бесплатные количественные сигналы (без токена)
   use_gemini_advisor: true    # Google Gemini LLM (GEMINI_API_KEY)
   use_groq_advisor: true       # Groq LLM — Llama (GROQ_API_KEY)
+  use_openrouter_advisor: true # OpenRouter LLM — free :free модели (OPENROUTER_API_KEY)
   pick_best_advisor: true     # true = выбрать лучший советник из всех активных
   deepseek_model: "deepseek-chat"  # Модель DeepSeek (ключ DEEPSEEK_API_KEY в .env)
   gemini_model: "gemini-2.0-flash"
   groq_model: "llama-3.3-70b-versatile"
-  llm_cache_hours: 2.0         # кэш Gemini/Groq (часы)
+  openrouter_model: "meta-llama/llama-3.3-70b-instruct:free"  # или openrouter/free
+  llm_cache_hours: 2.0         # кэш LLM-советников (часы)
   auto_strategy_selection_on_start: true # true = при старте выбрать лучшую стратегию по бэктесту для каждого инструмента
   strategy_selection_days: 90    # глубина истории (дней) для выбора стратегии
   strategy_selection_interval_days: 14  # пересчёт выбора стратегии раз в N дней (0 = только при старте и /select_strategy)
@@ -123,6 +125,7 @@ dynamic_portfolio:
   use_moex: true
   use_gemini: true
   use_groq: true
+  use_openrouter: true
   pick_best_advisor: true
   candidates:
     - SBER
@@ -158,6 +161,13 @@ gemini:
 groq:
   api_key: ""                   # GROQ_API_KEY в .env
   model: "llama-3.3-70b-versatile"
+
+# OpenRouter — единый LLM-шлюз, бесплатные :free модели (https://openrouter.ai/keys)
+openrouter:
+  api_key: ""                   # OPENROUTER_API_KEY в .env
+  model: "meta-llama/llama-3.3-70b-instruct:free"  # или openrouter/free
+  base_url: "https://openrouter.ai/api/v1"
+  site_url: ""                  # опционально, для HTTP-Referer
 
 risk:
   max_drawdown: 0.15           # Макс. допустимая просадка от пика (15%) — блокировка торговли

@@ -266,10 +266,12 @@ def refresh_dynamic_portfolio(
   deepseek_model: str = "deepseek-chat",
   gemini_model: str = "gemini-2.0-flash",
   groq_model: str = "llama-3.3-70b-versatile",
+  openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free",
   base_dir: Optional[Path] = None,
   finam_cfg: Any = None,
   gemini_cfg: Any = None,
   groq_cfg: Any = None,
+  openrouter_cfg: Any = None,
 ) -> Tuple[List[InstrumentConfig], str, bool]:
   """
   Обновляет состав портфеля через все активные советники; при pick_best_advisor — лучший по бэктесту.
@@ -385,6 +387,25 @@ def refresh_dynamic_portfolio(
     )
     if gq_sel:
       proposals.append(("groq", gq_sel, gq_summary))
+
+  if dp.use_openrouter:
+    from .openrouter_advisor import select_universe_via_openrouter
+
+    or_sel, or_summary = select_universe_via_openrouter(
+      candidates=candidates,
+      candidate_summary=summary_map,
+      min_instruments=dp.min_instruments,
+      max_instruments=dp.max_instruments,
+      max_weight=dp.max_weight_per_instrument,
+      model=openrouter_model,
+      api_key=getattr(openrouter_cfg, "api_key", "") if openrouter_cfg else "",
+      base_url=getattr(openrouter_cfg, "base_url", "https://openrouter.ai/api/v1") if openrouter_cfg else "https://openrouter.ai/api/v1",
+      site_url=getattr(openrouter_cfg, "site_url", "") if openrouter_cfg else "",
+      equity=equity,
+      market_context=market_context,
+    )
+    if or_sel:
+      proposals.append(("openrouter", or_sel, or_summary))
 
   selections: List[Dict[str, Any]] = []
   advisor_source = ""

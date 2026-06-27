@@ -99,6 +99,7 @@ async def main() -> None:
     finam_cfg=getattr(cfg, "finam", None),
     gemini_cfg=getattr(cfg, "gemini", None),
     groq_cfg=getattr(cfg, "groq", None),
+    openrouter_cfg=getattr(cfg, "openrouter", None),
   )
   broker_timeout = max(5.0, float(getattr(cfg.portfolio, "request_timeout_seconds", 30) or 30))
 
@@ -119,10 +120,12 @@ async def main() -> None:
           deepseek_model=getattr(cfg.portfolio, "deepseek_model", "deepseek-chat"),
           gemini_model=getattr(cfg.portfolio, "gemini_model", "gemini-2.0-flash"),
           groq_model=getattr(cfg.portfolio, "groq_model", "llama-3.3-70b-versatile"),
+          openrouter_model=getattr(cfg.portfolio, "openrouter_model", "meta-llama/llama-3.3-70b-instruct:free"),
           base_dir=base_dir,
           finam_cfg=getattr(cfg, "finam", None),
           gemini_cfg=getattr(cfg, "gemini", None),
           groq_cfg=getattr(cfg, "groq", None),
+          openrouter_cfg=getattr(cfg, "openrouter", None),
         ),
       )
     except Exception as e:

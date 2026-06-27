@@ -74,6 +74,7 @@ class DynamicPortfolioConfig:
   use_moex: bool = True
   use_gemini: bool = True
   use_groq: bool = True
+  use_openrouter: bool = True
   pick_best_advisor: bool = True
 
 
@@ -100,6 +101,14 @@ class GeminiConfig:
 class GroqConfig:
   api_key: str = ""
   model: str = "llama-3.3-70b-versatile"
+
+
+@dataclass
+class OpenRouterConfig:
+  api_key: str = ""
+  model: str = "meta-llama/llama-3.3-70b-instruct:free"
+  base_url: str = "https://openrouter.ai/api/v1"
+  site_url: str = ""
 
 
 @dataclass
@@ -186,11 +195,13 @@ class PortfolioConfig:
   use_moex_advisor: bool = True  # MOEX ISS: бесплатные количественные сигналы
   use_gemini_advisor: bool = True  # Google Gemini LLM
   use_groq_advisor: bool = True  # Groq LLM (Llama)
+  use_openrouter_advisor: bool = True  # OpenRouter LLM (:free модели)
   pick_best_advisor: bool = True  # выбрать лучший советник
   deepseek_model: str = "deepseek-chat"
   gemini_model: str = "gemini-2.0-flash"
   groq_model: str = "llama-3.3-70b-versatile"
-  llm_cache_hours: float = 2.0  # кэш Gemini/Groq (часы)
+  openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
+  llm_cache_hours: float = 2.0  # кэш LLM-советников (часы)
   auto_strategy_selection_on_start: bool = False  # при старте робота один раз выбрать лучшую стратегию по бэктесту для каждого инструмента
   strategy_selection_days: int = 90  # глубина истории (дней) для выбора стратегии
   strategy_selection_interval_days: int = 0  # пересчёт выбора стратегии раз в N дней (0 = только при старте и вручную)
@@ -244,6 +255,7 @@ class AppConfig:
   moex: MoexConfig | None = None
   gemini: GeminiConfig | None = None
   groq: GroqConfig | None = None
+  openrouter: OpenRouterConfig | None = None
 
 
 def load_config(path: str = "config.yaml") -> AppConfig:
@@ -347,10 +359,12 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     use_moex_advisor=p_raw.get("use_moex_advisor", True),
     use_gemini_advisor=p_raw.get("use_gemini_advisor", True),
     use_groq_advisor=p_raw.get("use_groq_advisor", True),
+    use_openrouter_advisor=p_raw.get("use_openrouter_advisor", True),
     pick_best_advisor=p_raw.get("pick_best_advisor", True),
     deepseek_model=p_raw.get("deepseek_model", "deepseek-chat"),
     gemini_model=p_raw.get("gemini_model", "gemini-2.0-flash"),
     groq_model=p_raw.get("groq_model", "llama-3.3-70b-versatile"),
+    openrouter_model=p_raw.get("openrouter_model", "meta-llama/llama-3.3-70b-instruct:free"),
     llm_cache_hours=float(p_raw.get("llm_cache_hours", 2.0) or 2.0),
     auto_strategy_selection_on_start=p_raw.get("auto_strategy_selection_on_start", False),
     strategy_selection_days=p_raw.get("strategy_selection_days", 90),
@@ -398,6 +412,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     use_moex=bool(dp_raw.get("use_moex", True)),
     use_gemini=bool(dp_raw.get("use_gemini", True)),
     use_groq=bool(dp_raw.get("use_groq", True)),
+    use_openrouter=bool(dp_raw.get("use_openrouter", True)),
     pick_best_advisor=bool(dp_raw.get("pick_best_advisor", True)),
   )
 
@@ -426,6 +441,14 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     model=str(gq_raw.get("model", "llama-3.3-70b-versatile") or "llama-3.3-70b-versatile"),
   )
 
+  or_raw = raw.get("openrouter") or {}
+  openrouter = OpenRouterConfig(
+    api_key=os.getenv("OPENROUTER_API_KEY", or_raw.get("api_key", "")),
+    model=str(or_raw.get("model", "meta-llama/llama-3.3-70b-instruct:free") or "meta-llama/llama-3.3-70b-instruct:free"),
+    base_url=str(or_raw.get("base_url", "https://openrouter.ai/api/v1") or "https://openrouter.ai/api/v1"),
+    site_url=str(or_raw.get("site_url", "") or ""),
+  )
+
   return AppConfig(
     mode=mode,
     tinkoff=tinkoff,
@@ -439,6 +462,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     moex=moex,
     gemini=gemini,
     groq=groq,
+    openrouter=openrouter,
   )
 
 
