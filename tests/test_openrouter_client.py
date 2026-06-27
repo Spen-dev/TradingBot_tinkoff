@@ -1,5 +1,12 @@
 """Тесты OpenRouter client."""
-from tinkoff_bot.openrouter_client import map_legacy_model, resolve_model_chain
+from tinkoff_bot.openrouter_client import api_key, map_legacy_model, resolve_model_chain
+
+
+def test_api_key_explicit_empty_skips_env(monkeypatch):
+  monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+  assert api_key("") == ""
+  assert api_key() == "sk-test"
+  assert api_key("sk-explicit") == "sk-explicit"
 
 
 def test_map_legacy_model():

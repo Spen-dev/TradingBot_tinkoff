@@ -23,7 +23,7 @@ def select_portfolio_via_macro(
   *,
   model: str = "google/gemini-2.5-flash-lite",
   models: Optional[List[str]] = None,
-  api_key_override: str = "",
+  api_key_override: Optional[str] = None,
   base_url: str = "https://openrouter.ai/api/v1",
   site_url: str = "",
   app_name: str = "Tinkoff Trading Bot",

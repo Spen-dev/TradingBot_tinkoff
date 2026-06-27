@@ -28,8 +28,11 @@ LEGACY_MODEL_MAP = {
 }
 
 
-def api_key(explicit: str = "") -> str:
-  return (explicit or os.environ.get("OPENROUTER_API_KEY", "")).strip()
+def api_key(explicit: Optional[str] = None) -> str:
+  """None — ключ из OPENROUTER_API_KEY; '' — явно без ключа (env не читается)."""
+  if explicit is not None:
+    return explicit.strip()
+  return os.environ.get("OPENROUTER_API_KEY", "").strip()
 
 
 def map_legacy_model(model: str) -> str:
@@ -62,7 +65,7 @@ def chat(
   *,
   model: str,
   models: Optional[List[str]] = None,
-  api_key_override: str = "",
+  api_key_override: Optional[str] = None,
   base_url: str = DEFAULT_BASE_URL,
   site_url: str = "",
   app_name: str = DEFAULT_APP_NAME,

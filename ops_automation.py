@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
-def fetch_openrouter_remaining_usd(api_key_override: str = "") -> Optional[float]:
+def fetch_openrouter_remaining_usd(api_key_override: Optional[str] = None) -> Optional[float]:
   """Остаток кредитов OpenRouter (USD). None если ключ не задан или API недоступен."""
   from .openrouter_client import api_key
 
