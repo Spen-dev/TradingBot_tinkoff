@@ -9,6 +9,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./learned_params:/app/learned_params
+      - .:/app
     ports:
       - "8000:8000"
     healthcheck:

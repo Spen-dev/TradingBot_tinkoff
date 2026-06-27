@@ -32,8 +32,29 @@ jobs:
           script: |
             set -e
             cd /opt/TradingBot_tinkoff
+            PRE=$(git rev-parse HEAD)
             git pull origin main
-            docker compose build
+            POST=$(git rev-parse HEAD)
+
+            rebuild=false
+            if ! docker image inspect tinkoff_bot:latest >/dev/null 2>&1; then
+              rebuild=true
+            elif [ "$PRE" != "$POST" ] && git diff --name-only "$PRE" "$POST" | grep -qE '^(Dockerfile|docker-compose\.yml|pyproject\.toml)$'; then
+              rebuild=true
+            fi
+
+            if $rebuild; then
+              echo "Rebuilding image (deps/Docker changed or image missing)..."
+              df -h /
+              docker builder prune -af || true
+              docker image prune -af || true
+              df -h /
+              docker compose build
+            else
+              echo "Code-only change: skip docker build, restart container."
+            fi
+
             docker compose up -d
+            docker compose restart bot
             docker compose ps
             curl -sf http://127.0.0.1:8000/health || true
