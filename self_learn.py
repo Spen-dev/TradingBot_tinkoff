@@ -283,6 +283,26 @@ def _get_signals_for_df(
 STRATEGY_CANDIDATES = ["momentum", "mean_reversion", "rsi", "breakout", "adaptive"]
 
 
+def strategy_selection_llm_kwargs(cfg: Any) -> Dict[str, Any]:
+  """Параметры LLM (OpenRouter) для run_strategy_selection из AppConfig."""
+  portfolio = cfg.portfolio
+  or_cfg = getattr(cfg, "openrouter", None)
+  allow_llm = bool(
+    getattr(portfolio, "use_openrouter_advisor", False)
+    or getattr(portfolio, "use_deepseek_advisor", False)
+  )
+  return {
+    "allow_llm": allow_llm,
+    "allow_deepseek": allow_llm,
+    "llm_model": getattr(portfolio, "openrouter_model", "openrouter/free"),
+    "llm_models": list(getattr(or_cfg, "models", None) or []) if or_cfg else None,
+    "llm_api_key": getattr(or_cfg, "api_key", "") if or_cfg else "",
+    "llm_base_url": getattr(or_cfg, "base_url", "https://openrouter.ai/api/v1") if or_cfg else "https://openrouter.ai/api/v1",
+    "llm_site_url": getattr(or_cfg, "site_url", "") if or_cfg else "",
+    "deepseek_model": getattr(portfolio, "deepseek_model", "deepseek-chat"),
+  }
+
+
 def _score_deepseek_vs_validation(
   inst: InstrumentConfig,
   df_val: pd.DataFrame,
@@ -319,6 +339,12 @@ def run_strategy_selection(
   min_trades: int = 5,
   risk_penalty: float = 0.5,
   allow_deepseek: bool = False,
+  allow_llm: bool = False,
+  llm_model: str = "openrouter/free",
+  llm_models: Optional[List[str]] = None,
+  llm_api_key: str = "",
+  llm_base_url: str = "https://openrouter.ai/api/v1",
+  llm_site_url: str = "",
   deepseek_model: str = "deepseek-chat",
   strategy_change_min_delta: float = 0.05,
   strategy_diversity_max_share: float = 0.0,
@@ -331,25 +357,34 @@ def run_strategy_selection(
   learned_before = load_learned_params()
   changes: List[Tuple[str, str, str]] = []
   weight_by_strategy: Dict[str, float] = {}
-  deepseek_recs: Dict[str, Dict[str, Any]] = {}
-  if allow_deepseek:
+  llm_recs: Dict[str, Dict[str, Any]] = {}
+  use_llm = allow_llm or allow_deepseek
+  if use_llm:
     try:
       equity, cash, positions = broker.get_equity_snapshot()
       last_prices: Dict[str, float] = {}
       for i in instruments:
         pos = positions.get(i.figi)
         last_prices[i.figi] = getattr(pos, "current_price", None) or broker.get_last_price(i.figi) or 0.0
-      from .deepseek_advisor import get_recommendations as get_deepseek_recommendations
-      deepseek_recs = get_deepseek_recommendations(
+      from .openrouter_advisor import get_recommendations as get_llm_recommendations
+      from .openrouter_client import map_legacy_model
+
+      primary = llm_model or map_legacy_model(deepseek_model)
+      llm_recs = get_llm_recommendations(
         instruments=instruments,
         positions=positions,
         equity=equity,
         cash=cash,
         last_prices=last_prices,
-        model=deepseek_model,
+        model=primary,
+        models=llm_models,
+        api_key_override=llm_api_key,
+        base_url=llm_base_url,
+        site_url=llm_site_url,
+        cache_hours=0,
       )
     except Exception as e:
-      logger.warning("DeepSeek при выборе стратегий: %s", e)
+      logger.warning("OpenRouter при выборе стратегий: %s", e)
   for inst in instruments:
     try:
       df = broker.get_historical_candles(inst.figi, from_dt, to_dt)
@@ -368,7 +403,7 @@ def run_strategy_selection(
       rl_path = Path(inst.strategy_params["rl_model_path"])
       if rl_path.exists():
         candidates.append("rl")
-    if allow_deepseek and inst.figi in deepseek_recs:
+    if use_llm and inst.figi in llm_recs:
       candidates.append("deepseek")
     eff = learned_before.get(inst.figi, {}).get("strategy", inst.strategy)
     current_strategy = eff if isinstance(eff, str) else (eff[0] if isinstance(eff, list) and eff else "adaptive")
@@ -389,7 +424,7 @@ def run_strategy_selection(
         else:
           diversity_penalty = 0.0
         if strat_name == "deepseek":
-          rec = deepseek_recs.get(inst.figi)
+          rec = llm_recs.get(inst.figi)
           if not rec:
             continue
           combined, display_val = _score_deepseek_vs_validation(inst, df_val, rec)
@@ -438,7 +473,7 @@ def run_strategy_selection(
     if current_strategy not in candidates:
       weight_by_strategy[current_strategy] = weight_by_strategy.get(current_strategy, 0) + tw
       if current_strategy == "deepseek":
-        reason = "нет рекомендации DeepSeek для FIGI в этом прогоне"
+        reason = "нет LLM-рекомендации OpenRouter для FIGI в этом прогоне"
       elif current_strategy == "rl":
         reason = "rl не в кандидатах (нет rl_model_path или файл модели не найден)"
       else:

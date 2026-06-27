@@ -516,7 +516,7 @@ async def main() -> None:
 
   async def on_select_strategy() -> str:
     try:
-      from tinkoff_bot.self_learn import run_strategy_selection
+      from tinkoff_bot.self_learn import run_strategy_selection, strategy_selection_llm_kwargs
       days = getattr(cfg.portfolio, "strategy_selection_days", 90) or 90
       comm = getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003
       msg, changes = run_strategy_selection(
@@ -526,10 +526,9 @@ async def main() -> None:
         use_sharpe=getattr(cfg.portfolio, "self_learn_use_sharpe", True),
         min_trades=getattr(cfg.portfolio, "self_learn_min_trades", 5) or 5,
         risk_penalty=getattr(cfg.portfolio, "self_learn_risk_penalty", 0.5) or 0.5,
-        allow_deepseek=getattr(cfg.portfolio, "use_deepseek_advisor", False),
-        deepseek_model=getattr(cfg.portfolio, "deepseek_model", "deepseek-chat"),
         strategy_change_min_delta=getattr(cfg.portfolio, "strategy_change_min_delta", 0.05) or 0,
         strategy_diversity_max_share=getattr(cfg.portfolio, "strategy_diversity_max_share", 0) or 0,
+        **strategy_selection_llm_kwargs(cfg),
       )
       if changes:
         await send_alert(tg, "📊 Смена стратегий: " + ", ".join(f"{t} {o}→{n}" for t, o, n in changes), "strategy_changes", force=True)
@@ -1264,7 +1263,7 @@ async def main() -> None:
         if auto_strategy_selection_on_start and not strategy_selection_start_done:
           strategy_selection_start_done = True
           try:
-            from tinkoff_bot.self_learn import run_strategy_selection
+            from tinkoff_bot.self_learn import run_strategy_selection, strategy_selection_llm_kwargs
             loop = asyncio.get_running_loop()
             sel_days = getattr(cfg.portfolio, "strategy_selection_days", 90) or 90
             msg, changes = await loop.run_in_executor(
@@ -1276,10 +1275,9 @@ async def main() -> None:
                 use_sharpe=getattr(cfg.portfolio, "self_learn_use_sharpe", True),
                 min_trades=getattr(cfg.portfolio, "self_learn_min_trades", 5) or 5,
                 risk_penalty=getattr(cfg.portfolio, "self_learn_risk_penalty", 0.5) or 0.5,
-                allow_deepseek=getattr(cfg.portfolio, "use_deepseek_advisor", False),
-                deepseek_model=getattr(cfg.portfolio, "deepseek_model", "deepseek-chat"),
                 strategy_change_min_delta=getattr(cfg.portfolio, "strategy_change_min_delta", 0.05) or 0,
                 strategy_diversity_max_share=getattr(cfg.portfolio, "strategy_diversity_max_share", 0) or 0,
+                **strategy_selection_llm_kwargs(cfg),
               ),
             )
             await send_alert(tg, "📊 Выбор стратегий при старте:\n" + msg, "strategy_selection", force=True)
@@ -1299,7 +1297,7 @@ async def main() -> None:
               pass
           if last_sel_date is None or (today - last_sel_date).days >= strategy_selection_interval_days:
             try:
-              from tinkoff_bot.self_learn import run_strategy_selection
+              from tinkoff_bot.self_learn import run_strategy_selection, strategy_selection_llm_kwargs
               loop = asyncio.get_running_loop()
               sel_days = getattr(cfg.portfolio, "strategy_selection_days", 90) or 90
               msg, changes = await loop.run_in_executor(
@@ -1311,10 +1309,9 @@ async def main() -> None:
                   use_sharpe=getattr(cfg.portfolio, "self_learn_use_sharpe", True),
                   min_trades=getattr(cfg.portfolio, "self_learn_min_trades", 5) or 5,
                   risk_penalty=getattr(cfg.portfolio, "self_learn_risk_penalty", 0.5) or 0.5,
-                  allow_deepseek=getattr(cfg.portfolio, "use_deepseek_advisor", False),
-                  deepseek_model=getattr(cfg.portfolio, "deepseek_model", "deepseek-chat"),
                   strategy_change_min_delta=getattr(cfg.portfolio, "strategy_change_min_delta", 0.05) or 0,
                   strategy_diversity_max_share=getattr(cfg.portfolio, "strategy_diversity_max_share", 0) or 0,
+                  **strategy_selection_llm_kwargs(cfg),
                 ),
               )
               strategy_selection_state_file.parent.mkdir(parents=True, exist_ok=True)
