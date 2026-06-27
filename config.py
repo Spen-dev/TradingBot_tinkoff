@@ -66,7 +66,7 @@ class DynamicPortfolioConfig:
   min_instruments: int = 4
   max_weight_per_instrument: float = 0.30
   refresh_interval_days: int = 7
-  default_strategy: str = "deepseek"
+  default_strategy: str = "adaptive"
   fallback_to_static: bool = True
   state_file: str = "data/dynamic_portfolio.json"
   use_deepseek: bool = True
@@ -106,11 +106,12 @@ class GroqConfig:
 @dataclass
 class OpenRouterConfig:
   api_key: str = ""
-  model: str = "openrouter/free"
+  model: str = "google/gemini-2.5-flash-lite"
   models: List[str] = field(default_factory=lambda: [
-    "openrouter/free",
-    "deepseek/deepseek-r1:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemini-2.5-flash-lite",
+    "deepseek/deepseek-chat",
+    "meta-llama/llama-3.3-70b-instruct",
+    "google/gemini-2.5-flash",
   ])
   base_url: str = "https://openrouter.ai/api/v1"
   site_url: str = ""
@@ -168,7 +169,7 @@ class PortfolioConfig:
   adx_period: int = 14
   adx_threshold: float = 25.0
   adx_threshold_low: float = 0.0  # 0 = авто (0.8*threshold); иначе нижний порог для weak_trend
-  self_learn_tune_by_regime: bool = False
+  self_learn_tune_by_regime: bool = True
   signal_strength_mult: float = 0.2  # множитель силы сигнала на размер (buy: 1+mult*strength, sell: 1-mult*strength)
   signal_strength_min: float = 0.3  # минимальная сила для расчёта размера заявки
   max_overweight_without_signal_pct: float = 0.0  # при перевесе > N% разрешать сокращение без сигнала sell (0=выкл)
@@ -205,14 +206,14 @@ class PortfolioConfig:
   deepseek_model: str = "deepseek-chat"
   gemini_model: str = "gemini-2.0-flash"
   groq_model: str = "llama-3.3-70b-versatile"
-  openrouter_model: str = "openrouter/free"
-  llm_cache_hours: float = 2.0  # кэш LLM-советников (часы)
+  openrouter_model: str = "google/gemini-2.5-flash-lite"
+  llm_cache_hours: float = 4.0  # кэш LLM-советников (часы)
   auto_strategy_selection_on_start: bool = False  # при старте робота один раз выбрать лучшую стратегию по бэктесту для каждого инструмента
   strategy_selection_days: int = 90  # глубина истории (дней) для выбора стратегии
   strategy_selection_interval_days: int = 0  # пересчёт выбора стратегии раз в N дней (0 = только при старте и вручную)
   strategy_change_min_delta: float = 0.05  # не менять стратегию, если прирост оценки меньше этого порога
   strategy_diversity_max_share: float = 0.0  # макс. доля портфеля у одной стратегии, 0 = не ограничивать (0.5 = 50%)
-  deepseek_cache_hours: float = 2.0  # кэш рекомендаций DeepSeek (часы), 0 = не кэшировать
+  deepseek_cache_hours: float = 4.0  # кэш рекомендаций DeepSeek (часы), 0 = не кэшировать
   deepseek_history_days: int = 10  # дней истории (доходность, волатильность) в контексте для DeepSeek
   rebalance_decisions_log: bool = True  # писать в лог решения ребаланса (стратегия, сигнал, заявки)
   aggressive_rebalance: bool = False  # максимально агрессивный ребаланс по весам (ослабить фильтры по сигналам/отклонению)
@@ -333,7 +334,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     adx_period=p_raw.get("adx_period", 14),
     adx_threshold=p_raw.get("adx_threshold", 25.0),
     adx_threshold_low=p_raw.get("adx_threshold_low", 0.0),
-    self_learn_tune_by_regime=p_raw.get("self_learn_tune_by_regime", False),
+    self_learn_tune_by_regime=p_raw.get("self_learn_tune_by_regime", True),
     signal_strength_mult=p_raw.get("signal_strength_mult", 0.2),
     signal_strength_min=p_raw.get("signal_strength_min", 0.3),
     max_overweight_without_signal_pct=p_raw.get("max_overweight_without_signal_pct", 0.0),
@@ -370,13 +371,13 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     gemini_model=p_raw.get("gemini_model", "gemini-2.0-flash"),
     groq_model=p_raw.get("groq_model", "llama-3.3-70b-versatile"),
     openrouter_model=p_raw.get("openrouter_model", "meta-llama/llama-3.3-70b-instruct:free"),
-    llm_cache_hours=float(p_raw.get("llm_cache_hours", 2.0) or 2.0),
+    llm_cache_hours=float(p_raw.get("llm_cache_hours", 4.0) or 4.0),
     auto_strategy_selection_on_start=p_raw.get("auto_strategy_selection_on_start", False),
     strategy_selection_days=p_raw.get("strategy_selection_days", 90),
     strategy_selection_interval_days=p_raw.get("strategy_selection_interval_days", 0),
     strategy_change_min_delta=p_raw.get("strategy_change_min_delta", 0.05),
     strategy_diversity_max_share=p_raw.get("strategy_diversity_max_share", 0.0),
-    deepseek_cache_hours=p_raw.get("deepseek_cache_hours", 2.0),
+    deepseek_cache_hours=p_raw.get("deepseek_cache_hours", 4.0),
     deepseek_history_days=p_raw.get("deepseek_history_days", 10),
     rebalance_decisions_log=p_raw.get("rebalance_decisions_log", True),
     aggressive_rebalance=p_raw.get("aggressive_rebalance", False),
@@ -409,7 +410,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     min_instruments=int(dp_raw.get("min_instruments", 4) or 4),
     max_weight_per_instrument=float(dp_raw.get("max_weight_per_instrument", 0.30) or 0.30),
     refresh_interval_days=int(dp_raw.get("refresh_interval_days", 7) or 7),
-    default_strategy=str(dp_raw.get("default_strategy", "deepseek") or "deepseek"),
+    default_strategy=str(dp_raw.get("default_strategy", "adaptive") or "adaptive"),
     fallback_to_static=bool(dp_raw.get("fallback_to_static", True)),
     state_file=str(dp_raw.get("state_file", "data/dynamic_portfolio.json") or "data/dynamic_portfolio.json"),
     use_deepseek=bool(dp_raw.get("use_deepseek", True)),
@@ -448,13 +449,14 @@ def load_config(path: str = "config.yaml") -> AppConfig:
 
   or_raw = raw.get("openrouter") or {}
   or_models_raw = or_raw.get("models") or [
-    "openrouter/free",
-    "deepseek/deepseek-r1:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemini-2.5-flash-lite",
+    "deepseek/deepseek-chat",
+    "meta-llama/llama-3.3-70b-instruct",
+    "google/gemini-2.5-flash",
   ]
   openrouter = OpenRouterConfig(
     api_key=os.getenv("OPENROUTER_API_KEY", or_raw.get("api_key", "")),
-    model=str(or_raw.get("model", "openrouter/free") or "openrouter/free"),
+    model=str(or_raw.get("model", "google/gemini-2.5-flash-lite") or "google/gemini-2.5-flash-lite"),
     models=[str(m) for m in or_models_raw if m],
     base_url=str(or_raw.get("base_url", "https://openrouter.ai/api/v1") or "https://openrouter.ai/api/v1"),
     site_url=str(or_raw.get("site_url", "") or ""),

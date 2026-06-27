@@ -12,12 +12,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_APP_NAME = "Tinkoff Trading Bot"
 
-# Цепочка free-моделей при 429/ошибке провайдера
+# Цепочка моделей при 429/ошибке провайдера (платные, без лимита free-tier)
 DEFAULT_FALLBACK_MODELS = [
-  "openrouter/free",
-  "deepseek/deepseek-r1:free",
-  "meta-llama/llama-3.3-70b-instruct:free",
-  "google/gemma-3-12b-it:free",
+  "google/gemini-2.5-flash-lite",
+  "deepseek/deepseek-chat",
+  "meta-llama/llama-3.3-70b-instruct",
+  "google/gemini-2.5-flash",
 ]
 
 # Старые имена моделей → OpenRouter slug
@@ -25,7 +25,7 @@ LEGACY_MODEL_MAP = {
   "deepseek-chat": "deepseek/deepseek-chat",
   "deepseek-reasoner": "deepseek/deepseek-r1",
   "gemini-2.0-flash": "google/gemini-2.0-flash-exp:free",
-  "llama-3.3-70b-versatile": "meta-llama/llama-3.3-70b-instruct:free",
+  "llama-3.3-70b-versatile": "meta-llama/llama-3.3-70b-instruct",
 }
 
 

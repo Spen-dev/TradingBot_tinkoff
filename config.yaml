@@ -61,7 +61,7 @@ portfolio:
   adx_period: 14               # Период индикатора ADX
   adx_threshold: 25.0          # ADX выше — тренд, ниже adx_threshold_low — флэт
   adx_threshold_low: 0.0       # 0 = авто (0.8*adx_threshold); иначе нижний порог weak_trend
-  self_learn_tune_by_regime: false  # Подбирать параметры отдельно для тренда и флэта
+  self_learn_tune_by_regime: true   # Подбирать параметры отдельно для тренда и флэта
   signal_strength_mult: 0.2    # Влияние силы сигнала на размер заявки (buy: 1+mult*strength)
   signal_strength_min: 0.3     # Минимальная сила сигнала для расчёта размера
   max_overweight_without_signal_pct: 0.0  # При перевесе > N% разрешать сокращение без sell (0=выкл)
@@ -97,28 +97,28 @@ portfolio:
   pick_best_advisor: true     # true = выбрать лучший советник из всех активных
   deepseek_model: "deepseek/deepseek-chat"  # OpenRouter slug (если use_deepseek_advisor=true)
   gemini_model: "google/gemini-2.0-flash-exp:free"
-  groq_model: "meta-llama/llama-3.3-70b-instruct:free"
-  openrouter_model: "openrouter/free"  # primary; fallback — openrouter.models
-  llm_cache_hours: 2.0         # кэш LLM (часы)
+  groq_model: "meta-llama/llama-3.3-70b-instruct"  # Groq через OpenRouter (платная)
+  openrouter_model: "google/gemini-2.5-flash-lite"  # primary; fallback — openrouter.models
+  llm_cache_hours: 4.0         # кэш LLM (часы); реже запросы к OpenRouter
   auto_strategy_selection_on_start: true # true = при старте выбрать лучшую стратегию по бэктесту для каждого инструмента
   strategy_selection_days: 90    # глубина истории (дней) для выбора стратегии
   strategy_selection_interval_days: 14  # пересчёт выбора стратегии раз в N дней (0 = только при старте и /select_strategy)
   strategy_change_min_delta: 0.05  # не менять стратегию, если прирост оценки меньше порога
   strategy_diversity_max_share: 0.5  # макс. доля портфеля у одной стратегии, 0 = не ограничивать
-  deepseek_cache_hours: 2.0  # кэш рекомендаций DeepSeek (часы), 0 = не кэшировать
+  deepseek_cache_hours: 4.0  # кэш LLM-рекомендаций (часы), 0 = не кэшировать
   deepseek_history_days: 10  # дней истории в контексте для DeepSeek (доходность, волатильность)
   rebalance_decisions_log: true  # писать в data/logs/rebalance_decisions.log решения ребаланса
   log_retention_days: 14        # хранить ротированные bot.log.* (дней); автоочистка раз в сутки
   aggressive_rebalance: true
 
-# Динамический состав портфеля: DeepSeek выбирает акции из пула кандидатов
+# Динамический состав портфеля: Finam/MOEX/LLM → pick_best по Sharpe
 dynamic_portfolio:
   enabled: true
   refresh_interval_days: 7
   max_instruments: 6
   min_instruments: 4
   max_weight_per_instrument: 0.30
-  default_strategy: deepseek
+  default_strategy: adaptive
   fallback_to_static: true
   use_deepseek: false         # LLM → OpenRouter (use_openrouter)
   use_finam: true
@@ -165,12 +165,12 @@ groq:
 # OpenRouter — единый LLM-шлюз (https://openrouter.ai/keys)
 openrouter:
   api_key: ""                   # OPENROUTER_API_KEY в .env
-  model: "openrouter/free"      # primary-модель
+  model: "google/gemini-2.5-flash-lite"  # primary: дешёвая, стабильный JSON
   models:                       # fallback при 429/ошибке
-    - openrouter/free
-    - deepseek/deepseek-r1:free
-    - meta-llama/llama-3.3-70b-instruct:free
-    - google/gemma-3-12b-it:free
+    - google/gemini-2.5-flash-lite
+    - deepseek/deepseek-chat
+    - meta-llama/llama-3.3-70b-instruct  # Groq: быстрая, ~$0.10/$0.32 за 1M
+    - google/gemini-2.5-flash
   base_url: "https://openrouter.ai/api/v1"
   site_url: ""
 
@@ -195,34 +195,34 @@ web:
   dashboard_url: "http://YOUR_VPS_IP:8000/dashboard"  # URL дашборда для кнопки в Telegram
 
 instruments:
-  # Fallback, если DeepSeek недоступен (при dynamic_portfolio.enabled=true)
+  # Fallback, если dynamic_portfolio недоступен (при dynamic_portfolio.enabled=true)
   - figi: BBG004730N88
     ticker: SBER
     lot: 1
-    strategy: deepseek
+    strategy: adaptive
     target_weight: 0.25
   - figi: BBG004731032
     ticker: LKOH
     lot: 1
-    strategy: deepseek
+    strategy: adaptive
     target_weight: 0.20
   - figi: BBG004731489
     ticker: GMKN
     lot: 10
-    strategy: deepseek
+    strategy: adaptive
     target_weight: 0.15
   - figi: BBG000R607Y3
     ticker: PLZL
     lot: 1
-    strategy: deepseek
+    strategy: adaptive
     target_weight: 0.15
   - figi: BBG004RVFCY3
     ticker: MGNT
     lot: 1
-    strategy: deepseek
+    strategy: adaptive
     target_weight: 0.10
   - figi: BBG004RVFFC0
     ticker: TATN
     lot: 1
-    strategy: deepseek
+    strategy: adaptive
     target_weight: 0.15
