@@ -12,6 +12,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote, urlsplit, urlunsplit
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,16 @@ DEFAULT_RSS_URLS = [
 
 def _strip_html(text: str) -> str:
   return re.sub(r"<[^>]+>", "", text or "").strip()
+
+
+def _encode_url(url: str) -> str:
+  """Percent-encode URL (urllib.Request не принимает кириллицу в query)."""
+  parts = urlsplit(url.strip())
+  if not parts.scheme or not parts.netloc:
+    return url.strip()
+  path = quote(parts.path, safe="/%")
+  query = quote(parts.query, safe="=&?%+")
+  return urlunsplit((parts.scheme, parts.netloc, path, query, parts.fragment))
 
 
 def _parse_rss_xml(raw: str, source: str, max_items: int) -> List[Dict[str, str]]:
@@ -51,7 +62,7 @@ def fetch_rss_headlines(
   max_items: int = 10,
   timeout: float = 20.0,
 ) -> List[Dict[str, str]]:
-  url = (url or "").strip()
+  url = _encode_url(url)
   if not url:
     return []
   try:
