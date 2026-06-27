@@ -8,8 +8,12 @@ if (-not (Test-Path $Gh)) {
 }
 
 $Repo = "Spen-dev/TradingBot_tinkoff"
-$VpsHost = "YOUR_VPS_IP"
-$VpsUser = "root"
+$VpsHost = $env:VPS_HOST
+if (-not $VpsHost) {
+  Write-Error "Задайте VPS_HOST в окружении, например: `$env:VPS_HOST = '1.2.3.4'"
+}
+$VpsUser = $env:VPS_USER
+if (-not $VpsUser) { $VpsUser = "root" }
 $KeyPath = Join-Path $env:USERPROFILE ".ssh\github_actions_tradingbot"
 if (-not (Test-Path $KeyPath)) {
   $KeyPath = Join-Path $env:USERPROFILE ".ssh\id_ed25519"

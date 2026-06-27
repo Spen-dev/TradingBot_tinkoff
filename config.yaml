@@ -198,7 +198,7 @@ risk:
 web:
   host: "0.0.0.0"              # Хост HTTP health-check
   port: 8000                   # Порт HTTP health-check
-  dashboard_url: "http://YOUR_VPS_IP:8000/dashboard"  # URL дашборда для кнопки в Telegram
+  dashboard_url: ""              # Задайте DASHBOARD_URL в .env (не коммитьте IP в git)
 
 instruments:
   # Fallback, если dynamic_portfolio недоступен (при dynamic_portfolio.enabled=true)

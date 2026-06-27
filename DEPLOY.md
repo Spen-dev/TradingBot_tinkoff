@@ -49,7 +49,8 @@ nano .env
 # TELEGRAM_TOKEN=...
 # TELEGRAM_ADMIN_CHAT_ID=...
 # SANDBOX_TARGET_CASH=120000
-# OPENROUTER_API_KEY=...   # опционально: LLM-советник через OpenRouter (стратегия ai)
+# OPENROUTER_API_KEY=...
+# DASHBOARD_URL=http://YOUR_VPS_IP:8000/dashboard
 ```
 
 Собрать образ и запустить:
@@ -93,8 +94,8 @@ docker compose up -d
 
 | Secret | Значение |
 |--------|----------|
-| `VPS_HOST` | `YOUR_VPS_IP` |
-| `VPS_USER` | `root` |
+| `VPS_HOST` | IP вашего VPS (не храните в git) |
+| `VPS_USER` | `root` (или другой пользователь SSH) |
 | `VPS_SSH_KEY` | приватный ключ SSH (`~/.ssh/id_ed25519`) |
 
 **Быстрая настройка** (после `gh auth login`):
