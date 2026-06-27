@@ -31,30 +31,48 @@ jobs:
           command_timeout: 30m
           script: |
             set -e
+            export DOCKER_BUILDKIT=1
+            export COMPOSE_DOCKER_CLI_BUILD=1
             cd /opt/TradingBot_tinkoff
             PRE=$(git rev-parse HEAD)
             git pull origin main
             POST=$(git rev-parse HEAD)
 
+            changed_files=""
+            if [ "$PRE" != "$POST" ]; then
+              changed_files=$(git diff --name-only "$PRE" "$POST")
+            fi
+
             rebuild=false
+            compose_changed=false
             if ! docker image inspect tinkoff_bot:latest >/dev/null 2>&1; then
               rebuild=true
-            elif [ "$PRE" != "$POST" ] && git diff --name-only "$PRE" "$POST" | grep -qE '^(Dockerfile|docker-compose\.yml|pyproject\.toml)$'; then
+              compose_changed=true
+            elif echo "$changed_files" | grep -qE '^(Dockerfile|pyproject\.toml)$'; then
               rebuild=true
+            fi
+            if echo "$changed_files" | grep -qE '^docker-compose\.yml$'; then
+              compose_changed=true
             fi
 
             if $rebuild; then
-              echo "Rebuilding image (deps/Docker changed or image missing)..."
-              df -h /
-              docker builder prune -af || true
-              docker image prune -af || true
-              df -h /
+              echo "Rebuilding image (Dockerfile or pyproject.toml changed)..."
+              used_pct=$(df / | awk 'NR==2 {gsub(/%/,"",$5); print $5}')
+              if [ "${used_pct:-0}" -ge 85 ]; then
+                echo "Disk ${used_pct}% — pruning Docker cache before build..."
+                docker builder prune -af || true
+                docker image prune -af || true
+                df -h /
+              fi
               docker compose build
+              compose_changed=true
             else
-              echo "Code-only change: skip docker build, restart container."
+              echo "Code-only change: skip docker build."
             fi
 
-            docker compose up -d
+            if $compose_changed; then
+              docker compose up -d
+            fi
             docker compose restart bot
             docker compose ps
             curl -sf http://127.0.0.1:8000/health || true
