@@ -15,6 +15,7 @@ dependencies = [
   "aiogram",
   "gymnasium",
   "stable-baselines3",
+  "openai",
 ]
 
 [project.optional-dependencies]

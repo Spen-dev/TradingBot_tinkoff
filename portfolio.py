@@ -193,11 +193,17 @@ class PortfolioManager:
     instruments: List[InstrumentConfig],
     broker: TinkoffBroker,
     risk: RiskManager,
+    finam_cfg: Any = None,
+    gemini_cfg: Any = None,
+    groq_cfg: Any = None,
   ):
     self.cfg = cfg
     self.instruments_cfg = {i.figi: i for i in instruments}
     self.broker = broker
     self.risk = risk
+    self.finam_cfg = finam_cfg
+    self.gemini_cfg = gemini_cfg
+    self.groq_cfg = groq_cfg
 
   def update_instruments(self, instruments: List[InstrumentConfig]) -> None:
     self.instruments_cfg = {i.figi: i for i in instruments}
@@ -271,15 +277,20 @@ class PortfolioManager:
         prices_for_target[figi] = pos.current_price if pos else self.broker.get_last_price(figi)
     targets = self._target_values(equity, prices_for_target)
 
-    # Рекомендации DeepSeek для инструментов со стратегией deepseek
+    # Рекомендации советников (DeepSeek / Finam / MOEX / Gemini / Groq — лучший)
     deepseek_recommendations: Dict[str, Dict[str, Any]] = {}
     use_deepseek = getattr(self.cfg, "use_deepseek_advisor", False)
+    use_finam = getattr(self.cfg, "use_finam_advisor", False)
+    use_moex = getattr(self.cfg, "use_moex_advisor", True)
+    use_gemini = getattr(self.cfg, "use_gemini_advisor", True)
+    use_groq = getattr(self.cfg, "use_groq_advisor", True)
     instruments_list = list(self.instruments_cfg.values())
-    has_deepseek = any(
-      (getattr(c, "strategy", None) == "deepseek") or (isinstance(getattr(c, "strategy", None), list) and "deepseek" in getattr(c, "strategy", []))
+    has_advisor_strategy = any(
+      (getattr(c, "strategy", None) == "deepseek")
+      or (isinstance(getattr(c, "strategy", None), list) and "deepseek" in getattr(c, "strategy", []))
       for c in instruments_list
     )
-    if use_deepseek and has_deepseek:
+    if (use_deepseek or use_finam or use_moex or use_gemini or use_groq) and has_advisor_strategy:
       last_prices = {}
       for figi in self.instruments_cfg:
         pos = positions.get(figi)
@@ -367,16 +378,47 @@ class PortfolioManager:
           except Exception:
             history_summary[key] = "ошибка при получении индекса"
       try:
-        from .deepseek_advisor import get_recommendations as get_deepseek_recommendations
-        recs = get_deepseek_recommendations(
+        from .finam_client import FinamClient
+        from .moex_client import MoexClient
+        from .market_data_client import CompositeMarketClient
+        from .advisor_ensemble import get_best_recommendations
+        fc = FinamClient(
+          api_token=getattr(self.finam_cfg, "api_token", "") if self.finam_cfg else "",
+          base_url=getattr(self.finam_cfg, "base_url", "https://api.finam.ru") if self.finam_cfg else "https://api.finam.ru",
+          exchange_mic=getattr(self.finam_cfg, "exchange_mic", "MISX") if self.finam_cfg else "MISX",
+        )
+        mc = CompositeMarketClient(finam_client=fc, moex_client=MoexClient())
+        llm_cache = getattr(self.cfg, "llm_cache_hours", 2.0) or 0
+        recs, advisor_used = get_best_recommendations(
           instruments=instruments_list,
           positions=positions,
           equity=equity,
           cash=cash,
           last_prices=last_prices,
-          model=getattr(self.cfg, "deepseek_model", "deepseek-chat"),
-          cache_hours=getattr(self.cfg, "deepseek_cache_hours", 0) or 0,
-          history_summary=history_summary,
+          use_deepseek=use_deepseek,
+          use_finam=use_finam,
+          use_moex=use_moex,
+          use_gemini=use_gemini,
+          use_groq=use_groq,
+          deepseek_kwargs={
+            "model": getattr(self.cfg, "deepseek_model", "deepseek-chat"),
+            "cache_hours": getattr(self.cfg, "deepseek_cache_hours", 0) or 0,
+            "history_summary": history_summary,
+          },
+          gemini_kwargs={
+            "model": getattr(self.cfg, "gemini_model", "gemini-2.0-flash"),
+            "api_key": getattr(getattr(self, "gemini_cfg", None), "api_key", ""),
+            "cache_hours": llm_cache,
+            "history_summary": history_summary,
+          },
+          groq_kwargs={
+            "model": getattr(self.cfg, "groq_model", "llama-3.3-70b-versatile"),
+            "api_key": getattr(getattr(self, "groq_cfg", None), "api_key", ""),
+            "cache_hours": llm_cache,
+            "history_summary": history_summary,
+          },
+          market_client=mc,
+          finam_history_days=getattr(self.cfg, "deepseek_history_days", 30) or 30,
         )
         for figi, r in recs.items():
           if figi in targets:
@@ -384,8 +426,10 @@ class PortfolioManager:
             if tw is not None:
               targets[figi] = equity * max(0.0, min(1.0, float(tw)))
         deepseek_recommendations = recs
+        if advisor_used and advisor_used != "none":
+          logger.debug("Advisor rebalance: source=%s instruments=%d", advisor_used, len(recs))
       except Exception as e:
-        logger.warning("DeepSeek advisor: %s", e)
+        logger.warning("Advisor ensemble: %s", e)
 
     # Тейк-профит и трейлинг прибыли: обновить пики, выявить принудительную продажу
     peaks = _load_position_peaks()

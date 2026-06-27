@@ -195,11 +195,17 @@ def load_state(path: Path) -> Optional[dict]:
     return None
 
 
-def save_state(path: Path, instruments: List[InstrumentConfig], summary: str = "") -> None:
+def save_state(
+  path: Path,
+  instruments: List[InstrumentConfig],
+  summary: str = "",
+  advisor_source: str = "",
+) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
   payload = {
     "updated_at": datetime.now().isoformat(),
     "summary": summary,
+    "advisor_source": advisor_source,
     "instruments": [
       {
         "figi": i.figi,
@@ -258,10 +264,15 @@ def refresh_dynamic_portfolio(
   force: bool = False,
   history_days: int = 10,
   deepseek_model: str = "deepseek-chat",
+  gemini_model: str = "gemini-2.0-flash",
+  groq_model: str = "llama-3.3-70b-versatile",
   base_dir: Optional[Path] = None,
+  finam_cfg: Any = None,
+  gemini_cfg: Any = None,
+  groq_cfg: Any = None,
 ) -> Tuple[List[InstrumentConfig], str, bool]:
   """
-  Обновляет состав портфеля через DeepSeek или загружает из кэша.
+  Обновляет состав портфеля через все активные советники; при pick_best_advisor — лучший по бэктесту.
   Возвращает (instruments, message, changed).
   """
   base = base_dir or Path(__file__).resolve().parent
@@ -286,35 +297,130 @@ def refresh_dynamic_portfolio(
   market_context = ""
 
   summary_map = build_candidate_summary(broker, candidates, history_days=history_days)
-  selections, ds_summary = select_universe_via_deepseek(
-    candidates=candidates,
-    candidate_summary=summary_map,
-    min_instruments=dp.min_instruments,
-    max_instruments=dp.max_instruments,
-    max_weight=dp.max_weight_per_instrument,
-    model=deepseek_model,
-    equity=equity,
-    market_context=market_context,
+
+  from .finam_client import FinamClient
+  from .moex_client import MoexClient
+  from . import finam_advisor, moex_advisor
+  from .advisor_ensemble import pick_best_portfolio
+  from .market_data_client import CompositeMarketClient
+
+  finam_client = FinamClient(
+    api_token=getattr(finam_cfg, "api_token", "") if finam_cfg else "",
+    base_url=getattr(finam_cfg, "base_url", "https://api.finam.ru") if finam_cfg else "https://api.finam.ru",
+    exchange_mic=getattr(finam_cfg, "exchange_mic", "MISX") if finam_cfg else "MISX",
   )
+  moex_client = MoexClient()
+  market_client = CompositeMarketClient(finam_client=finam_client, moex_client=moex_client)
+
+  proposals: List[Tuple[str, List[Dict[str, Any]], str]] = []
+
+  if dp.use_deepseek:
+    ds_sel, ds_summary = select_universe_via_deepseek(
+      candidates=candidates,
+      candidate_summary=summary_map,
+      min_instruments=dp.min_instruments,
+      max_instruments=dp.max_instruments,
+      max_weight=dp.max_weight_per_instrument,
+      model=deepseek_model,
+      equity=equity,
+      market_context=market_context,
+    )
+    if ds_sel:
+      proposals.append(("deepseek", ds_sel, ds_summary))
+
+  if dp.use_finam and finam_client.configured:
+    fm_sel, fm_summary = finam_advisor.select_portfolio_via_finam(
+      finam_client,
+      candidates,
+      min_instruments=dp.min_instruments,
+      max_instruments=dp.max_instruments,
+      max_weight=dp.max_weight_per_instrument,
+      history_days=max(history_days, 60),
+    )
+    if fm_sel:
+      proposals.append(("finam", fm_sel, fm_summary))
+
+  if dp.use_moex:
+    mx_sel, mx_summary = moex_advisor.select_portfolio_via_moex(
+      moex_client,
+      candidates,
+      min_instruments=dp.min_instruments,
+      max_instruments=dp.max_instruments,
+      max_weight=dp.max_weight_per_instrument,
+      history_days=max(history_days, 60),
+    )
+    if mx_sel:
+      proposals.append(("moex", mx_sel, mx_summary))
+
+  if dp.use_gemini:
+    from .gemini_advisor import select_universe_via_gemini
+
+    gm_sel, gm_summary = select_universe_via_gemini(
+      candidates=candidates,
+      candidate_summary=summary_map,
+      min_instruments=dp.min_instruments,
+      max_instruments=dp.max_instruments,
+      max_weight=dp.max_weight_per_instrument,
+      model=gemini_model,
+      api_key=getattr(gemini_cfg, "api_key", "") if gemini_cfg else "",
+      equity=equity,
+      market_context=market_context,
+    )
+    if gm_sel:
+      proposals.append(("gemini", gm_sel, gm_summary))
+
+  if dp.use_groq:
+    from .groq_advisor import select_universe_via_groq
+
+    gq_sel, gq_summary = select_universe_via_groq(
+      candidates=candidates,
+      candidate_summary=summary_map,
+      min_instruments=dp.min_instruments,
+      max_instruments=dp.max_instruments,
+      max_weight=dp.max_weight_per_instrument,
+      model=groq_model,
+      api_key=getattr(groq_cfg, "api_key", "") if groq_cfg else "",
+      equity=equity,
+      market_context=market_context,
+    )
+    if gq_sel:
+      proposals.append(("groq", gq_sel, gq_summary))
+
+  selections: List[Dict[str, Any]] = []
+  advisor_source = ""
+  combined_summary = ""
+
+  if not proposals:
+    pass
+  elif len(proposals) == 1 or not dp.pick_best_advisor:
+    advisor_source = proposals[0][0]
+    selections = proposals[0][1]
+    combined_summary = proposals[0][2]
+  else:
+    advisor_source, selections, combined_summary, _ = pick_best_portfolio(
+      proposals,
+      market_client,
+      history_days=max(history_days, 60),
+    )
 
   if not selections:
     if dp.fallback_to_static and fallback_instruments:
-      msg = f"DeepSeek недоступен, используется статический конфиг ({len(fallback_instruments)} инструментов)"
+      msg = "Советники недоступны, используется статический конфиг ({0} инструментов)".format(len(fallback_instruments))
       if state and instruments_from_state(state):
         cached = instruments_from_state(state)
         return cached, msg + " (кэш сохранён ранее)", False
       return fallback_instruments, msg, False
-    return fallback_instruments, "DeepSeek не вернул состав, изменений нет", False
+    return fallback_instruments, "Советники не вернули состав, изменений нет", False
 
   instruments = instruments_from_selections(selections, broker, dp.default_strategy)
   tickers = ", ".join(f"{i.ticker} {i.target_weight:.0%}" for i in instruments)
-  msg = f"DeepSeek выбрал: {tickers}"
-  if ds_summary:
-    msg += f". {ds_summary}"
+  msg = combined_summary or f"{advisor_source} выбрал: {tickers}"
+  if advisor_source and "выбран" not in msg.lower():
+    msg = f"[{advisor_source}] {msg}"
 
   old_tickers = {i.ticker for i in instruments_from_state(state)} if state else set()
   new_tickers = {i.ticker for i in instruments}
   changed = old_tickers != new_tickers or not state
 
-  save_state(state_path, instruments, summary=ds_summary)
+  save_state(state_path, instruments, summary=combined_summary, advisor_source=advisor_source)
   return instruments, msg, changed

@@ -88,8 +88,16 @@ portfolio:
   alert_drawdown_pct: 0.05     # Алерт при просадке портфеля >= N% (0=выкл)
   alert_daily_loss_pct: 0.02   # Алерт при дневном убытке >= N% от старта дня (0=выкл)
   alert_live_ping_hours: 24    # Раз в N ч отправлять «Робот работает» (песочница как в бою)
-  use_deepseek_advisor: true # true = запрашивать рекомендации DeepSeek (веса и сигналы buy/sell/hold)
+  use_deepseek_advisor: true # DeepSeek: LLM-рекомендации по портфелю
+  use_finam_advisor: true     # Finam Trade API: количественные сигналы (momentum+Sharpe)
+  use_moex_advisor: true      # MOEX ISS: бесплатные количественные сигналы (без токена)
+  use_gemini_advisor: true    # Google Gemini LLM (GEMINI_API_KEY)
+  use_groq_advisor: true       # Groq LLM — Llama (GROQ_API_KEY)
+  pick_best_advisor: true     # true = выбрать лучший советник из всех активных
   deepseek_model: "deepseek-chat"  # Модель DeepSeek (ключ DEEPSEEK_API_KEY в .env)
+  gemini_model: "gemini-2.0-flash"
+  groq_model: "llama-3.3-70b-versatile"
+  llm_cache_hours: 2.0         # кэш Gemini/Groq (часы)
   auto_strategy_selection_on_start: true # true = при старте выбрать лучшую стратегию по бэктесту для каждого инструмента
   strategy_selection_days: 90    # глубина истории (дней) для выбора стратегии
   strategy_selection_interval_days: 14  # пересчёт выбора стратегии раз в N дней (0 = только при старте и /select_strategy)
@@ -104,12 +112,18 @@ portfolio:
 # Динамический состав портфеля: DeepSeek выбирает акции из пула кандидатов
 dynamic_portfolio:
   enabled: true
-  refresh_interval_days: 7      # пересборка состава раз в N дней (0 = только вручную /refresh_portfolio)
+  refresh_interval_days: 7
   max_instruments: 6
   min_instruments: 4
   max_weight_per_instrument: 0.30
-  default_strategy: deepseek    # стратегия для выбранных бумаг (deepseek | rl | momentum и т.д.)
-  fallback_to_static: true      # при ошибке API — instruments из конфига ниже
+  default_strategy: deepseek
+  fallback_to_static: true
+  use_deepseek: true
+  use_finam: true
+  use_moex: true
+  use_gemini: true
+  use_groq: true
+  pick_best_advisor: true
   candidates:
     - SBER
     - LKOH
@@ -123,6 +137,27 @@ dynamic_portfolio:
     - CHMF
     - AFLT
     - NLMK
+
+# Finam Trade API — данные и количественный советник (https://api.finam.ru)
+finam:
+  api_token: ""                 # FINAM_API_TOKEN в .env (токен из личного кабинета Finam)
+  exchange_mic: "MISX"            # MOEX
+  base_url: "https://api.finam.ru"
+
+# MOEX ISS — бесплатные свечи (https://iss.moex.com)
+moex:
+  base_url: "https://iss.moex.com/iss"
+  board: "TQBR"
+
+# Google Gemini — LLM-советник (https://aistudio.google.com/apikey)
+gemini:
+  api_key: ""                   # GEMINI_API_KEY в .env
+  model: "gemini-2.0-flash"
+
+# Groq — быстрый LLM-советник (https://console.groq.com)
+groq:
+  api_key: ""                   # GROQ_API_KEY в .env
+  model: "llama-3.3-70b-versatile"
 
 risk:
   max_drawdown: 0.15           # Макс. допустимая просадка от пика (15%) — блокировка торговли

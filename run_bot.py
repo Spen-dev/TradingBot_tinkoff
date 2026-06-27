@@ -91,7 +91,15 @@ async def main() -> None:
   risk = RiskManager(cfg.risk)
   static_instruments = list(cfg.instruments)
   dp_cfg = getattr(cfg, "dynamic_portfolio", None)
-  pm = PortfolioManager(cfg.portfolio, cfg.instruments, broker, risk)
+  pm = PortfolioManager(
+    cfg.portfolio,
+    cfg.instruments,
+    broker,
+    risk,
+    finam_cfg=getattr(cfg, "finam", None),
+    gemini_cfg=getattr(cfg, "gemini", None),
+    groq_cfg=getattr(cfg, "groq", None),
+  )
   broker_timeout = max(5.0, float(getattr(cfg.portfolio, "request_timeout_seconds", 30) or 30))
 
   async def apply_dynamic_portfolio(force: bool = False, notify: bool = False) -> str:
@@ -109,7 +117,12 @@ async def main() -> None:
           force=force,
           history_days=getattr(cfg.portfolio, "deepseek_history_days", 10) or 10,
           deepseek_model=getattr(cfg.portfolio, "deepseek_model", "deepseek-chat"),
+          gemini_model=getattr(cfg.portfolio, "gemini_model", "gemini-2.0-flash"),
+          groq_model=getattr(cfg.portfolio, "groq_model", "llama-3.3-70b-versatile"),
           base_dir=base_dir,
+          finam_cfg=getattr(cfg, "finam", None),
+          gemini_cfg=getattr(cfg, "gemini", None),
+          groq_cfg=getattr(cfg, "groq", None),
         ),
       )
     except Exception as e:

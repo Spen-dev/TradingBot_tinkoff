@@ -59,7 +59,7 @@ class TinkoffConfig:
 
 @dataclass
 class DynamicPortfolioConfig:
-  """Динамический состав портфеля по советам DeepSeek."""
+  """Динамический состав портфеля по советам DeepSeek / Finam."""
   enabled: bool = False
   candidates: List[str] = field(default_factory=list)
   max_instruments: int = 6
@@ -69,6 +69,37 @@ class DynamicPortfolioConfig:
   default_strategy: str = "deepseek"
   fallback_to_static: bool = True
   state_file: str = "data/dynamic_portfolio.json"
+  use_deepseek: bool = True
+  use_finam: bool = True
+  use_moex: bool = True
+  use_gemini: bool = True
+  use_groq: bool = True
+  pick_best_advisor: bool = True
+
+
+@dataclass
+class FinamConfig:
+  api_token: str = ""
+  base_url: str = "https://api.finam.ru"
+  exchange_mic: str = "MISX"
+
+
+@dataclass
+class MoexConfig:
+  base_url: str = "https://iss.moex.com/iss"
+  board: str = "TQBR"
+
+
+@dataclass
+class GeminiConfig:
+  api_key: str = ""
+  model: str = "gemini-2.0-flash"
+
+
+@dataclass
+class GroqConfig:
+  api_key: str = ""
+  model: str = "llama-3.3-70b-versatile"
 
 
 @dataclass
@@ -150,8 +181,16 @@ class PortfolioConfig:
   alert_drawdown_pct: float = 0.0   # алерт при просадке >= N% (0 = выкл)
   alert_daily_loss_pct: float = 0.0  # алерт при дневном убытке >= N% от старта дня (0 = выкл)
   alert_live_ping_hours: float = 0.0  # раз в N часов отправлять «Робот работает» (0 = выкл)
-  use_deepseek_advisor: bool = False  # использовать DeepSeek для рекомендаций по инструментам со стратегией deepseek
+  use_deepseek_advisor: bool = False  # DeepSeek для рекомендаций
+  use_finam_advisor: bool = False  # Finam Trade API: количественные сигналы
+  use_moex_advisor: bool = True  # MOEX ISS: бесплатные количественные сигналы
+  use_gemini_advisor: bool = True  # Google Gemini LLM
+  use_groq_advisor: bool = True  # Groq LLM (Llama)
+  pick_best_advisor: bool = True  # выбрать лучший советник
   deepseek_model: str = "deepseek-chat"
+  gemini_model: str = "gemini-2.0-flash"
+  groq_model: str = "llama-3.3-70b-versatile"
+  llm_cache_hours: float = 2.0  # кэш Gemini/Groq (часы)
   auto_strategy_selection_on_start: bool = False  # при старте робота один раз выбрать лучшую стратегию по бэктесту для каждого инструмента
   strategy_selection_days: int = 90  # глубина истории (дней) для выбора стратегии
   strategy_selection_interval_days: int = 0  # пересчёт выбора стратегии раз в N дней (0 = только при старте и вручную)
@@ -201,6 +240,10 @@ class AppConfig:
   web: WebConfig
   instruments: List[InstrumentConfig]
   dynamic_portfolio: DynamicPortfolioConfig | None = None
+  finam: FinamConfig | None = None
+  moex: MoexConfig | None = None
+  gemini: GeminiConfig | None = None
+  groq: GroqConfig | None = None
 
 
 def load_config(path: str = "config.yaml") -> AppConfig:
@@ -300,7 +343,15 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     alert_daily_loss_pct=p_raw.get("alert_daily_loss_pct", 0.0),
     alert_live_ping_hours=p_raw.get("alert_live_ping_hours", 0.0),
     use_deepseek_advisor=p_raw.get("use_deepseek_advisor", False),
+    use_finam_advisor=p_raw.get("use_finam_advisor", False),
+    use_moex_advisor=p_raw.get("use_moex_advisor", True),
+    use_gemini_advisor=p_raw.get("use_gemini_advisor", True),
+    use_groq_advisor=p_raw.get("use_groq_advisor", True),
+    pick_best_advisor=p_raw.get("pick_best_advisor", True),
     deepseek_model=p_raw.get("deepseek_model", "deepseek-chat"),
+    gemini_model=p_raw.get("gemini_model", "gemini-2.0-flash"),
+    groq_model=p_raw.get("groq_model", "llama-3.3-70b-versatile"),
+    llm_cache_hours=float(p_raw.get("llm_cache_hours", 2.0) or 2.0),
     auto_strategy_selection_on_start=p_raw.get("auto_strategy_selection_on_start", False),
     strategy_selection_days=p_raw.get("strategy_selection_days", 90),
     strategy_selection_interval_days=p_raw.get("strategy_selection_interval_days", 0),
@@ -342,6 +393,37 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     default_strategy=str(dp_raw.get("default_strategy", "deepseek") or "deepseek"),
     fallback_to_static=bool(dp_raw.get("fallback_to_static", True)),
     state_file=str(dp_raw.get("state_file", "data/dynamic_portfolio.json") or "data/dynamic_portfolio.json"),
+    use_deepseek=bool(dp_raw.get("use_deepseek", True)),
+    use_finam=bool(dp_raw.get("use_finam", True)),
+    use_moex=bool(dp_raw.get("use_moex", True)),
+    use_gemini=bool(dp_raw.get("use_gemini", True)),
+    use_groq=bool(dp_raw.get("use_groq", True)),
+    pick_best_advisor=bool(dp_raw.get("pick_best_advisor", True)),
+  )
+
+  fm_raw = raw.get("finam") or {}
+  finam = FinamConfig(
+    api_token=os.getenv("FINAM_API_TOKEN", fm_raw.get("api_token", "")),
+    base_url=str(fm_raw.get("base_url", "https://api.finam.ru") or "https://api.finam.ru"),
+    exchange_mic=str(fm_raw.get("exchange_mic", "MISX") or "MISX"),
+  )
+
+  mx_raw = raw.get("moex") or {}
+  moex = MoexConfig(
+    base_url=str(mx_raw.get("base_url", "https://iss.moex.com/iss") or "https://iss.moex.com/iss"),
+    board=str(mx_raw.get("board", "TQBR") or "TQBR"),
+  )
+
+  gm_raw = raw.get("gemini") or {}
+  gemini = GeminiConfig(
+    api_key=os.getenv("GEMINI_API_KEY", gm_raw.get("api_key", "")),
+    model=str(gm_raw.get("model", "gemini-2.0-flash") or "gemini-2.0-flash"),
+  )
+
+  gq_raw = raw.get("groq") or {}
+  groq = GroqConfig(
+    api_key=os.getenv("GROQ_API_KEY", gq_raw.get("api_key", "")),
+    model=str(gq_raw.get("model", "llama-3.3-70b-versatile") or "llama-3.3-70b-versatile"),
   )
 
   return AppConfig(
@@ -353,6 +435,10 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     web=web,
     instruments=instruments,
     dynamic_portfolio=dynamic_portfolio,
+    finam=finam,
+    moex=moex,
+    gemini=gemini,
+    groq=groq,
   )
 
 
