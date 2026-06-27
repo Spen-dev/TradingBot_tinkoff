@@ -114,6 +114,7 @@ async def main() -> None:
   fallback_alert_last_date: date | None = None
 
   async def apply_dynamic_portfolio(force: bool = False, notify: bool = False) -> str:
+    nonlocal fallback_alert_last_date
     if not dp_cfg or not dp_cfg.enabled:
       return "Динамический портфель отключён (dynamic_portfolio.enabled=false)."
     from tinkoff_bot.dynamic_portfolio import refresh_dynamic_portfolio
@@ -147,8 +148,12 @@ async def main() -> None:
         if notify:
           await send_alert(tg, f"📊 Состав портфеля обновлён: {msg}", "dynamic_portfolio", force=True)
     msg_l = msg.lower()
-    if "статический конфиг" in msg or "fallback" in msg_l:
-      nonlocal fallback_alert_last_date
+    if (
+      "статический конфиг" in msg
+      or "советники недоступны" in msg_l
+      or "не вернули состав" in msg_l
+      or "figi не найдены" in msg_l
+    ):
       alert_day = _now_for_window().date()
       if fallback_alert_last_date != alert_day:
         fallback_alert_last_date = alert_day

@@ -214,11 +214,13 @@ class PortfolioManager:
       if total_price > 0:
         return {figi: equity * (prices.get(figi, 0.0) / total_price) for figi in self.instruments_cfg}
     learned = load_learned_params()
-    targets = {}
+    weights: Dict[str, float] = {}
     for ins in self.instruments_cfg.values():
-      w = get_effective_target_weight(ins, learned)
-      targets[ins.figi] = equity * w
-    return targets
+      weights[ins.figi] = max(0.0, get_effective_target_weight(ins, learned))
+    total_w = sum(weights.values())
+    if total_w <= 0:
+      return {ins.figi: 0.0 for ins in self.instruments_cfg.values()}
+    return {figi: equity * (w / total_w) for figi, w in weights.items()}
 
   def rebalance_needed(self, day_start_equity: float, drift_pct: float) -> bool:
     """Ребаланс нужен, если какая-то доля отклонилась от целевой больше чем на drift_pct (0.05 = 5%)."""

@@ -35,7 +35,15 @@ def main() -> int:
   parser = argparse.ArgumentParser(description="Старт периода наблюдения sandbox")
   parser.add_argument("--reset-learned", action="store_true", help="Бэкап и очистка learned_params/params.json")
   parser.add_argument("--force", action="store_true", help="Выполнить даже если observation_lock уже есть")
+  parser.add_argument(
+    "--update-baseline-only",
+    action="store_true",
+    help="Только обновить observation_baseline.json (без lock/reset, игнорирует lock)",
+  )
   args = parser.parse_args()
+
+  if args.update_baseline_only:
+    args.force = True
 
   if LOCK_FILE.exists() and not args.force:
     print(f"Наблюдение уже начато ({LOCK_FILE}), пропуск. --force для повтора.")
@@ -51,15 +59,35 @@ def main() -> int:
   broker = TinkoffBroker(cfg.tinkoff)
   equity, cash, positions = broker.get_equity_snapshot(cfg.portfolio.base_currency)
 
-  dp_path = ROOT / "data" / "dynamic_portfolio.json"
-  dp_data = {}
-  if dp_path.exists():
+  started_at = datetime.now().isoformat()
+  git_rev = _git_rev()
+  positions_count = len(positions)
+  if args.update_baseline_only and BASELINE_FILE.exists():
     try:
-      dp_data = json.loads(dp_path.read_text(encoding="utf-8"))
+      prev = json.loads(BASELINE_FILE.read_text(encoding="utf-8"))
+      started_at = prev.get("started_at") or started_at
+      git_rev = prev.get("git_rev") or git_rev
+      equity = float(prev.get("equity", equity))
+      cash = float(prev.get("cash", cash))
+      positions_count = int(prev.get("positions_count", positions_count))
     except Exception:
       pass
 
-  if args.reset_learned:
+  dp_path = ROOT / "data" / "dynamic_portfolio.json"
+  dp_data: dict = {}
+  instruments_for_baseline = list(cfg.instruments)
+  if dp_path.exists():
+    try:
+      dp_data = json.loads(dp_path.read_text(encoding="utf-8"))
+      from tinkoff_bot.dynamic_portfolio import instruments_from_state
+
+      dp_inst = instruments_from_state(dp_data)
+      if dp_inst:
+        instruments_for_baseline = dp_inst
+    except Exception:
+      pass
+
+  if args.reset_learned and not args.update_baseline_only:
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     if LEARNED_FILE.exists():
       stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -71,11 +99,11 @@ def main() -> int:
     print("learned_params/params.json очищен")
 
   baseline = {
-    "started_at": datetime.now().isoformat(),
-    "git_rev": _git_rev(),
+    "started_at": started_at,
+    "git_rev": git_rev,
     "equity": equity,
     "cash": cash,
-    "positions_count": len(positions),
+    "positions_count": positions_count,
     "instruments": [
       {
         "figi": i.figi,
@@ -83,7 +111,7 @@ def main() -> int:
         "target_weight": i.target_weight,
         "strategy": str(i.strategy),
       }
-      for i in cfg.instruments
+      for i in instruments_for_baseline
     ],
     "dynamic_portfolio": {
       "updated_at": dp_data.get("updated_at"),
@@ -94,6 +122,12 @@ def main() -> int:
   BASELINE_FILE.parent.mkdir(parents=True, exist_ok=True)
   BASELINE_FILE.write_text(json.dumps(baseline, ensure_ascii=False, indent=2), encoding="utf-8")
   print(f"Baseline: {BASELINE_FILE}")
+
+  if args.update_baseline_only:
+    baseline["baseline_corrected_at"] = datetime.now().isoformat()
+    baseline["git_rev_deploy"] = _git_rev()
+    print("Baseline обновлён (--update-baseline-only), lock и equity старта сохранены.")
+    return 0
 
   lock = {"started_at": baseline["started_at"], "git_rev": baseline["git_rev"]}
   LOCK_FILE.write_text(json.dumps(lock, ensure_ascii=False, indent=2), encoding="utf-8")

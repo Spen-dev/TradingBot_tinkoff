@@ -56,3 +56,16 @@ def test_build_rebalance_orders_returns_list(portfolio_cfg, risk_cfg, instrument
     pm = PortfolioManager(portfolio_cfg, instruments, broker, risk)
     orders = pm.build_rebalance_orders(100_000.0)
     assert isinstance(orders, list)
+
+
+def test_target_values_normalizes_learned_weights(portfolio_cfg, risk_cfg, instruments, monkeypatch):
+    broker = MagicMock()
+    risk = RiskManager(risk_cfg)
+    pm = PortfolioManager(portfolio_cfg, instruments, broker, risk)
+    monkeypatch.setattr(
+        "tinkoff_bot.portfolio.load_learned_params",
+        lambda: {"F1": {"target_weight": 0.9}, "F2": {"target_weight": 0.1}},
+    )
+    targets = pm._target_values(100_000.0)
+    assert abs(sum(targets.values()) - 100_000.0) < 1.0
+    assert abs(targets["F1"] - 90_000.0) < 1.0
