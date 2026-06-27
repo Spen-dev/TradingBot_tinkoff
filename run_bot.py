@@ -1333,6 +1333,7 @@ async def main() -> None:
         append_equity_point(now, eq, cs, npos)
         st = risk.update_equity(eq, day_start_equity or eq)
         dd = (st.max_equity_seen - st.equity) / max(st.max_equity_seen, 1e-9) if st.max_equity_seen else 0.0
+        update_equity(st.equity, dd)
         try:
           from zoneinfo import ZoneInfo
           updated_at_msk = datetime.now(ZoneInfo("Europe/Moscow")).isoformat()
