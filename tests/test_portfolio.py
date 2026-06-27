@@ -41,8 +41,8 @@ def risk_cfg():
 @pytest.fixture
 def instruments():
     return [
-        InstrumentConfig(figi="F1", ticker="A", strategy="rl", target_weight=0.5, strategy_params={"rl_model_path": "x.zip"}, lot=1),
-        InstrumentConfig(figi="F2", ticker="B", strategy="rl", target_weight=0.5, strategy_params={"rl_model_path": "y.zip"}, lot=1),
+        InstrumentConfig(figi="F1", ticker="A", strategy="adaptive", target_weight=0.5, strategy_params={}, lot=1),
+        InstrumentConfig(figi="F2", ticker="B", strategy="momentum", target_weight=0.5, strategy_params={}, lot=1),
     ]
 
 

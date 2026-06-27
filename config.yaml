@@ -37,14 +37,9 @@ portfolio:
   alert_cooldown_minutes: 30   # Минимальный интервал между однотипными алертами (мин)
   no_trades_alert_hours: 72    # Алерт «нет сделок» после N часов (песочница как в бою)
   daily_digest_time: "18:00"   # Время ежедневного дайджеста (ЧЧ:ММ)
-  rl_train_on_start: true      # Обучать RL-модели при старте робота
-  rl_train_interval_days: 14   # Периодическое переобучение RL раз в N дней (0 = только при старте)
-  rl_train_days: 365           # Глубина истории для обучения RL (дней)
-  rl_train_timesteps: 30000    # Шагов PPO при обучении RL (меньше — быстрее старт на VPS)
-  rl_train_walk_forward_ratio: 0.7  # Доля данных на обучение, остальное — валидация (0.5–0.9)
   self_learn_train_ratio: 0.7  # Доля выборки на обучение при самообучении
   self_learn_use_sharpe: true  # Оптимизировать по Шарпу (иначе по PnL)
-  self_learn_min_trades: 3     # Мин. сделок (учёт max(train, val); меньше — мягче для RL/редких сделок)
+  self_learn_min_trades: 3     # Мин. сделок (учёт max(train, val))
   self_learn_risk_penalty: 0.5 # Штраф за просадку в метрике самообучения
   self_learn_optuna_trials: 30 # Число испытаний Optuna (0 = перебор по сетке)
   self_learn_optimize_weights: true  # Подбирать целевые веса инструментов при самообучении

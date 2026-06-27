@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from pathlib import Path
 from typing import List, Optional, Union
 from datetime import datetime, timedelta
 
@@ -14,7 +13,6 @@ logger = logging.getLogger(__name__)
 
 from .broker import TinkoffBroker
 from .config import InstrumentConfig
-from .rl_env import obs_from_candles
 from .strategy_names import AI_STRATEGY, LEGACY_AI_STRATEGY_ALIASES, is_ai_strategy, normalize_strategy_name
 
 @dataclass
@@ -435,44 +433,6 @@ class AIStrategyStub(BaseStrategy):
 DeepSeekStubStrategy = AIStrategyStub
 
 
-class RLStrategy(BaseStrategy):
-  """Стратегия на признаках RL-окружения. Если задан rl_model_path и файл есть — используется обученная модель (PPO), иначе порог по доходности."""
-  def __init__(self, instrument: InstrumentConfig, broker: TinkoffBroker):
-    super().__init__(instrument, broker)
-    self._model = None
-    path = (instrument.strategy_params or {}).get("rl_model_path")
-    if path and Path(path).exists():
-      try:
-        from stable_baselines3 import PPO
-        self._model = PPO.load(path)
-      except Exception as e:
-        logger.debug("RL: не удалось загрузить модель %s: %s", path, e)
-
-  def compute_signal(self, now: datetime) -> Signal:
-    df = _get_candles(self.instrument, self.broker, 60, now=now)
-    if df is None or len(df) < 50:
-      return Signal(figi=self.instrument.figi, side="hold", strength=0.0)
-    obs = obs_from_candles(df, window=50)
-    if self._model is not None:
-      action, _ = self._model.predict(obs, deterministic=True)
-      if action == 1:
-        return Signal(figi=self.instrument.figi, side="buy", strength=0.7)
-      if action == 2:
-        return Signal(figi=self.instrument.figi, side="sell", strength=0.7)
-      return Signal(figi=self.instrument.figi, side="hold", strength=0.0)
-    # Fallback без модели: short momentum по средней доходности за окно (obs[0] — нормализованная)
-    mean_return_signal = float(obs[0])
-    threshold = self.instrument.strategy_params.get("threshold", 0.02)
-    strength = min(1.0, abs(mean_return_signal) / max(threshold, 1e-9) * 0.5)
-    if mean_return_signal > threshold:
-      logger.debug("RL %s fallback (short momentum): buy strength=%.2f", self.instrument.ticker, strength)
-      return Signal(figi=self.instrument.figi, side="buy", strength=strength)
-    if mean_return_signal < -threshold:
-      logger.debug("RL %s fallback (short momentum): sell strength=%.2f", self.instrument.ticker, strength)
-      return Signal(figi=self.instrument.figi, side="sell", strength=strength)
-    return Signal(figi=self.instrument.figi, side="hold", strength=0.0)
-
-
 class CombinedStrategy(BaseStrategy):
   """Взвешенное голосование стратегий: buy если сумма весов buy > 0.5, sell если сумма весов sell > 0.5."""
 
@@ -531,8 +491,6 @@ def _build_one(name: str, instrument: InstrumentConfig, broker: TinkoffBroker) -
     return TimeFilterStrategy(instrument, broker)
   if name == "adaptive":
     return AdaptiveStrategy(instrument, broker)
-  if name == "rl":
-    return RLStrategy(instrument, broker)
   if name == "ai":
     return AIStrategyStub(instrument, broker)
   raise ValueError(f"Unknown strategy: {name}")

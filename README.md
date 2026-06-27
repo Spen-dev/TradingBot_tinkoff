@@ -1,6 +1,6 @@
 # Tinkoff Trading Bot
 
-Автоматический ребаланс портфеля MOEX (Tinkoff Invest API): стратегии adaptive / RL / ai, динамический состав (Finam, MOEX ISS, macro-новости, OpenRouter LLM), Telegram-управление, Docker на VPS.
+Автоматический ребаланс портфеля MOEX (Tinkoff Invest API): стратегии adaptive / ai, динамический состав (Finam, MOEX ISS, macro-новости, OpenRouter LLM), Telegram-управление, Docker на VPS.
 
 **Copyright © 2026 Spn. All rights reserved.**  
 Исходный код защищён проприетарной лицензией — см. [LICENSE](LICENSE). Копирование, форки, деплой и коммерческое использование **без письменного разрешения запрещены**. Просмотр репозитория не даёт права на использование.
@@ -8,7 +8,7 @@
 ## Возможности
 
 - **Брокер:** Tinkoff Invest (sandbox / real), retry при сбоях API
-- **Стратегии:** adaptive, momentum, mean reversion, RL, **ai** (OpenRouter: Gemini Flash Lite + fallback)
+- **Стратегии:** adaptive, momentum, mean reversion, **ai** (OpenRouter: Gemini Flash Lite + fallback)
 - **Динамический состав:** Finam, MOEX, macro-события (RSS → LLM), pick_best_advisor
 - **Автоматизация (`ops`):** автостарт sandbox, healthcheck, бэкап learned_params, алерт баланса OpenRouter, macro-триггеры, watchdog → restart
 - **Деплой:** Docker Compose, GitHub Actions → VPS ([DEPLOY.md](DEPLOY.md))
@@ -64,10 +64,6 @@ pytest tests/ -v
   `python run_bot.py`  
   В **sandbox** с `ops.auto_start_sandbox: true` торговля стартует сама после перезапуска. Иначе нажмите **Старт** в Telegram. **СТОП** — пауза; выход — Ctrl+C.
 
-- **Обучение RL-моделей:**  
-  `python train_rl.py --figi BBG004730ZJ9 --days 365 --out data/rl_model.zip --timesteps 50000`  
-  Опции: `--commission`, `--walk-forward`, `--tune` (подбор гиперпараметров Optuna).
-
 - **Самообучение (подбор параметров стратегий):**  
   Через Telegram команду «Переобучить» или вызов `run_retrain` из кода.
 
@@ -96,7 +92,7 @@ pytest tests/ -v
 
 Перед обновлением или для сохранения состояния рекомендуется делать бэкап:
 
-- **data/** — логи (`data/logs/`), алерты (`data/alerts.log`), состояние риска, кэш, RL-модели (`data/*.zip`, `data/*.json`), история сделок, last_trades, position_peaks.
+- **data/** — логи (`data/logs/`), алерты (`data/alerts.log`), состояние риска, кэш (`data/*.json`), история сделок, last_trades, position_peaks.
 - **learned_params/** — подобранные параметры стратегий (`params.json`).
 
 Пример (Windows PowerShell):

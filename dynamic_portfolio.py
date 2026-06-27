@@ -107,8 +107,6 @@ def instruments_from_selections(
       logger.warning("dynamic_portfolio: пропуск %s — не найден FIGI: %s", ticker, e)
       continue
     strategy_params: Dict[str, Any] = {}
-    if strategy == "rl":
-      strategy_params["rl_model_path"] = f"data/rl_model_{ticker}.zip"
     out.append(
       InstrumentConfig(
         figi=figi,

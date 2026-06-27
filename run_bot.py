@@ -706,7 +706,7 @@ async def main() -> None:
       await send_alert(tg, f"❌ Автостарт sandbox не удался: {e}", "auto_start_error", force=True)
 
   async def daily_digest_scheduler():
-    """Отдельный цикл: дайджест не зависит от длины тика планировщика (RL, недельный отчёт и т.д.)."""
+    """Отдельный цикл: дайджест не зависит от длины тика планировщика (недельный отчёт и т.д.)."""
     nonlocal day_start_equity
     digest_time = getattr(cfg.portfolio, "daily_digest_time", "18:00")
     try:
@@ -809,8 +809,6 @@ async def main() -> None:
     last_rebalance_date: date | None = None
     last_drift_rebalance: datetime | None = None
     last_retrain_date: date | None = None
-    last_rl_train_date: date | None = None
-    rl_train_start_done = False
     strategy_selection_start_done = False
     auto_strategy_selection_on_start = getattr(cfg.portfolio, "auto_strategy_selection_on_start", False)
     strategy_selection_interval_days = getattr(cfg.portfolio, "strategy_selection_interval_days", 0) or 0
@@ -864,9 +862,6 @@ async def main() -> None:
     last_interval_rebalance_at: datetime | None = None
     last_drift_eligibility_ts: datetime | None = None
     auto_retrain_days = getattr(cfg.portfolio, "auto_retrain_interval_days", 0) or 0
-    rl_train_on_start = getattr(cfg.portfolio, "rl_train_on_start", False)
-    rl_train_interval_days = getattr(cfg.portfolio, "rl_train_interval_days", 0) or 0
-    rl_instruments = [i for i in cfg.instruments if getattr(i, "strategy", None) == "rl"]
     rt_mins = hour * 60 + minute
     we_cfg = int(getattr(cfg.portfolio, "rebalance_window_end_minutes", 24 * 60) or (24 * 60))
     market_index_figi = getattr(cfg.portfolio, "market_index_figi", "") or ""
@@ -1062,7 +1057,7 @@ async def main() -> None:
 
         day_start = day_start_equity or 0.0
         if scheduler_ok:
-          # До RL / тяжёлого недельного отчёта: иначе цикл мог дойти до ребаланса уже после закрытия окна.
+          # До тяжёлого недельного отчёта: иначе цикл мог дойти до ребаланса уже после закрытия окна.
           if market_index_figi and last_market_check_date != today:
             last_market_check_date = today
             panic_today = False
@@ -1309,30 +1304,11 @@ async def main() -> None:
             if any(r[5] for r in rows[:4]):
               bt_lines.append("* бэктест по суррогатной стратегии (ai в learned без API в отчёте)")
             bt_text = "\n".join(bt_lines) if bt_lines else "нет достаточно данных для бэктеста"
-            rl_lines = []
-            for inst in rl_instruments:
-              try:
-                params = getattr(inst, "strategy_params", None) or {}
-                model_path = params.get("rl_model_path", f"data/rl_model_{inst.ticker}.zip")
-                meta_path = base_dir / Path(model_path).with_suffix(".json")
-                if meta_path.exists():
-                  meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                  dt_str = meta.get("date", "")[:10]
-                  if len(dt_str) >= 10:
-                    from datetime import datetime as _dt
-                    d = _dt.fromisoformat(dt_str)
-                    dt_str = d.strftime("%d.%m.%Y")
-                  days = meta.get("days", 0)
-                  rl_lines.append(f"{inst.ticker}: {dt_str}, окно {days} дн.")
-              except Exception:
-                pass
-            rl_text = "\n".join(rl_lines) if rl_lines else "нет данных"
             msg = (
               f"📈 Недельный отчёт: портфель {equity:.2f} {cfg.portfolio.base_currency}, "
               f"сделок за неделю: {len(trades_week)}, позиций: {npos}"
               f"\n\n📊 Инструменты (оценка 30 дн.):\n{per_inst_text}"
               f"\n\n📚 Стратегии (оценка 30 дн.):\n{strat_text}"
-              f"\n\n🤖 RL-модели:\n{rl_text}"
               f"\n\n⏸ Пауза по инструментам: {pause_text}\n⏱ Пауза по риску до: {risk_text}"
               f"\n\n🧪 Бэктест стратегий за {bt_days} дн. (оценка):\n{bt_text}"
             )
@@ -1343,35 +1319,6 @@ async def main() -> None:
               last_weekly_report_date = today
           except Exception as e:
             logger.warning("Недельный отчёт: %s", e)
-
-        # RL при старте процесса (один раз): до проверки started — не ждать Telegram «Старт»
-        if rl_instruments and rl_train_on_start and not rl_train_start_done:
-          rl_train_start_done = True
-          last_rl_train_date = today
-          rl_days = getattr(cfg.portfolio, "rl_train_days", 365) or 365
-          rl_steps = getattr(cfg.portfolio, "rl_train_timesteps", 50_000) or 50_000
-          results = []
-          try:
-            from tinkoff_bot.train_rl import run_rl_train
-            loop = asyncio.get_running_loop()
-            for inv in rl_instruments:
-              out_path = base_dir / "data" / f"rl_model_{getattr(inv, 'ticker', inv.figi)}.zip"
-              comm = getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003
-              wf = getattr(cfg.portfolio, "rl_train_walk_forward_ratio", 0.7) or 0.7
-              res = await loop.run_in_executor(
-                None,
-                lambda i=inv, p=str(out_path): run_rl_train(
-                  broker, i.figi, days=rl_days, out_path=p, timesteps=rl_steps, verbose=0,
-                  commission_rate=comm, walk_forward_ratio=wf,
-                ),
-              )
-              results.append(res)
-            await send_alert(tg, "🧠 RL обучение (при старте): " + "; ".join(results), "rl_train", force=True)
-            logger.info("RL при старте процесса завершено: %s", "; ".join(results))
-          except Exception as e:
-            inc_error()
-            logger.exception("RL при старте процесса: %s", e)
-            await send_alert(tg, f"❌ Ошибка RL обучения: {e}", "rl_train_error", force=True)
 
         # Без «Старт» весь блок ниже (ребаланс, дашборд-снимок, самообучение по расписанию…) не выполнялся.
         if not started and not getattr(cfg.portfolio, "auto_rebalance_when_stopped", False):
@@ -1525,40 +1472,6 @@ async def main() -> None:
         elif auto_retrain_days > 0 and last_retrain_date is None:
           last_retrain_date = today
 
-        # RL: периодическое переобучение по интервалу (разовое при старте процесса — выше, до проверки started)
-        if rl_instruments:
-          if rl_train_interval_days > 0:
-            if last_rl_train_date is None:
-              last_rl_train_date = today
-            elif (today - last_rl_train_date).days >= rl_train_interval_days:
-              last_rl_train_date = today
-              rl_days = getattr(cfg.portfolio, "rl_train_days", 365) or 365
-              rl_steps = getattr(cfg.portfolio, "rl_train_timesteps", 50_000) or 50_000
-              results = []
-              try:
-                from tinkoff_bot.train_rl import run_rl_train
-                loop = asyncio.get_running_loop()
-                for inv in rl_instruments:
-                  out_path = base_dir / "data" / f"rl_model_{getattr(inv, 'ticker', inv.figi)}.zip"
-                  comm = getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003
-                  wf = getattr(cfg.portfolio, "rl_train_walk_forward_ratio", 0.7) or 0.7
-                  res = await loop.run_in_executor(
-                    None,
-                    lambda i=inv, p=str(out_path): run_rl_train(
-                      broker, i.figi, days=rl_days, out_path=p, timesteps=rl_steps, verbose=0,
-                      commission_rate=comm, walk_forward_ratio=wf,
-                    ),
-                  )
-                  results.append(res)
-                await send_alert(
-                  tg,
-                  f"🧠 RL обучение (раз в {rl_train_interval_days} дн.): " + "; ".join(results),
-                  "rl_train_periodic",
-                  force=True,
-                )
-              except Exception as e:
-                inc_error()
-                await send_alert(tg, f"❌ Ошибка RL обучения: {e}", "rl_train_periodic_error", force=True)
       except Exception:
         logger.exception("Планировщик: необработанная ошибка в тике — цикл продолжается на следующей минуте")
 

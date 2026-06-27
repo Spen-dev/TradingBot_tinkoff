@@ -390,10 +390,6 @@ def run_strategy_selection(
     df_train = df.iloc[:split]
     df_val = df.iloc[split:]
     candidates = list(STRATEGY_CANDIDATES)
-    if isinstance(inst.strategy_params, dict) and inst.strategy_params.get("rl_model_path"):
-      rl_path = Path(inst.strategy_params["rl_model_path"])
-      if rl_path.exists():
-        candidates.append("rl")
     if use_llm and inst.figi in llm_recs:
       candidates.append(AI_STRATEGY)
     eff = learned_before.get(inst.figi, {}).get("strategy", inst.strategy)
@@ -460,15 +456,13 @@ def run_strategy_selection(
       except Exception as e:
         logger.debug("Стратегия %s для %s: %s", strat_name, inst.ticker, e)
         continue
-    # Текущая стратегия не в списке кандидатов (rl без файла, ai без ответа API,
+    # Текущая стратегия не в списке кандидатов (ai без ответа API,
     # volume_weighted/index/… вне STRATEGY_CANDIDATES) — иначе current_score остаётся None
     # и сравнение дало бы ложное переключение на любого «оценённого» кандидата.
     if current_strategy not in candidates:
       weight_by_strategy[current_strategy] = weight_by_strategy.get(current_strategy, 0) + tw
       if is_ai_strategy(current_strategy):
         reason = "нет LLM-рекомендации OpenRouter для FIGI в этом прогоне"
-      elif current_strategy == "rl":
-        reason = "rl не в кандидатах (нет rl_model_path или файл модели не найден)"
       else:
         reason = "стратегия не входит в перебор кандидатов"
       lines.append(f"  {inst.ticker}: {current_strategy} ({reason}, без смены)")
@@ -560,8 +554,6 @@ def tune_instrument_params(
     keys_to_tune = ["period", "overbought", "oversold"]
   elif strategy_type == "ma_crossover":
     keys_to_tune = ["fast_period", "slow_period"]
-  elif strategy_type == "rl":
-    keys_to_tune = ["threshold"]
   else:
     keys_to_tune = ["lookback", "threshold"]
 
@@ -621,7 +613,7 @@ def tune_instrument_params(
       if study.best_params:
         cand = dict(study.best_params)
         _, _, cand_score, cand_nt = score_params(cand)
-        # Не застревать на «победителе» Optuna с нулём сделок / штрафном score — дать шанс сетке и RL-fallback
+        # Не застревать на «победителе» Optuna с нулём сделок / штрафном score — дать шанс сетке и fallback
         if cand_nt >= min_trades and cand_score > -1e8:
           best_params = cand
           best_score = cand_score
@@ -651,18 +643,6 @@ def tune_instrument_params(
         del current[key]
 
     recurse(keys_to_tune, 0, {})
-
-  # RL: если перебор пуст — текущие params при любой сделке на истории
-  if strategy_type == "rl" and not best_params:
-    try:
-      current_params = dict(instrument.strategy_params or {})
-      _, _, combined, nt = score_params(current_params)
-      if nt >= 1:
-        best_params = current_params
-        best_score = combined
-        logger.info("Самообучение %s (rl): приняты текущие параметры, nt_gate=%d score=%.4f", instrument.ticker, nt, combined)
-    except Exception as e:
-      logger.debug("RL fallback для %s: %s", instrument.ticker, e)
 
   # Любая стратегия: если сетка/Optuna ничего не приняли — не терять текущий конфиг при активности на истории
   if not best_params:
@@ -741,8 +721,7 @@ def run_retrain(
       eff = learned.get(inst.figi, {}).get("strategy", inst.strategy)
       eff_strategy = eff if isinstance(eff, str) else (eff[0] if isinstance(eff, list) and eff else "adaptive")
       tune_strategy, strip_strategy_from_best = _tune_strategy_surrogate(inst, eff_strategy, eff)
-      # Для RL сетка почти только threshold (сигналы часто те же); порог сделок мягче, иначе часто «параметры не подобраны»
-      effective_min_trades = max(1, min(2, min_trades)) if eff_strategy == "rl" else min_trades
+      effective_min_trades = min_trades
       eff_params = _strategy_params_only(get_effective_params(inst, learned, None))
       inst_for_tune = InstrumentConfig(
         figi=inst.figi, ticker=inst.ticker, strategy=tune_strategy,

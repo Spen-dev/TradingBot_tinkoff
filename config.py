@@ -157,12 +157,6 @@ class PortfolioConfig:
   alert_cooldown_minutes: int = 30
   no_trades_alert_hours: int = 0
   daily_digest_time: str = "18:00"
-  # RL: автообучение стратегии rl
-  rl_train_on_start: bool = False
-  rl_train_interval_days: int = 0  # 0 = только вручную / по расписанию при старте
-  rl_train_days: int = 365
-  rl_train_timesteps: int = 50_000
-  rl_train_walk_forward_ratio: float = 0.7
   # Самообучение: расширенные опции
   self_learn_train_ratio: float = 0.7
   self_learn_use_sharpe: bool = True
@@ -320,10 +314,6 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     alert_cooldown_minutes=p_raw.get("alert_cooldown_minutes", 30),
     no_trades_alert_hours=p_raw.get("no_trades_alert_hours", 0),
     daily_digest_time=p_raw.get("daily_digest_time", "18:00"),
-    rl_train_on_start=p_raw.get("rl_train_on_start", False),
-    rl_train_interval_days=p_raw.get("rl_train_interval_days", 0),
-    rl_train_days=p_raw.get("rl_train_days", 365),
-    rl_train_timesteps=p_raw.get("rl_train_timesteps", 50_000),
     self_learn_train_ratio=p_raw.get("self_learn_train_ratio", 0.7),
     self_learn_use_sharpe=p_raw.get("self_learn_use_sharpe", True),
     self_learn_min_trades=p_raw.get("self_learn_min_trades", 5),
@@ -345,7 +335,6 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     signal_strength_mult=p_raw.get("signal_strength_mult", 0.2),
     signal_strength_min=p_raw.get("signal_strength_min", 0.3),
     max_overweight_without_signal_pct=p_raw.get("max_overweight_without_signal_pct", 0.0),
-    rl_train_walk_forward_ratio=p_raw.get("rl_train_walk_forward_ratio", 0.7),
     market_index_figi=p_raw.get("market_index_figi", ""),
     market_panic_drop_pct=p_raw.get("market_panic_drop_pct", 0.05),
     market_vol_low_threshold_pct=p_raw.get("market_vol_low_threshold_pct", 0.01),
@@ -495,7 +484,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
 
 VALID_STRATEGIES = (
   "mean_reversion", "momentum", "rsi", "ma_crossover", "breakout",
-  "volume_weighted", "volatility_regime", "index", "time_filter", "adaptive", "rl", "ai",
+  "volume_weighted", "volatility_regime", "index", "time_filter", "adaptive", "ai",
 )
 
 
@@ -531,10 +520,6 @@ def validate_config(cfg: "AppConfig") -> tuple[bool, list[str]]:
       norm = normalize_strategy_name(strat)
       if strat is not None and norm not in VALID_STRATEGIES:
         errors.append(f"Неизвестная стратегия для {getattr(i, 'ticker', '')}: {strat}")
-    if strategies_to_check and "rl" in strategies_to_check:
-      params = getattr(i, "strategy_params", None) or {}
-      if not params.get("rl_model_path"):
-        errors.append(f"Для стратегии rl у инструмента {getattr(i, 'ticker', '')} укажите strategy_params.rl_model_path")
   try:
     from .learned_params import load_learned_params
     data = load_learned_params()
