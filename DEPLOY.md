@@ -91,11 +91,19 @@ docker compose up -d
 
 **Secrets в репозитории GitHub** (Settings → Secrets and variables → Actions):
 
-| Secret | Пример |
-|--------|--------|
+| Secret | Значение |
+|--------|----------|
 | `VPS_HOST` | `YOUR_VPS_IP` |
 | `VPS_USER` | `root` |
-| `VPS_SSH_KEY` | приватный ключ SSH (полное содержимое) |
+| `VPS_SSH_KEY` | приватный ключ SSH (`~/.ssh/id_ed25519`) |
+
+**Быстрая настройка** (после `gh auth login`):
+
+```powershell
+.\scripts\setup_github_secrets.ps1
+```
+
+Скрипт добавит secrets и обновит описание репозитория на GitHub.
 
 На сервере репозиторий должен лежать в `/opt/TradingBot_tinkoff` (как в workflow).
 
