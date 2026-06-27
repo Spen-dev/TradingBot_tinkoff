@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass, field
+from datetime import date
 from typing import List, Dict, Any, Union
 
 import yaml
@@ -166,6 +167,7 @@ class PortfolioConfig:
   rebalance_window_start_minutes: int = 0  # устарело, на окно ребаланса не влияет
   rebalance_window_end_minutes: int = 1090
   trading_timezone: str = ""  # например Europe/Moscow; пусто = локальное время сервера
+  rebalance_trading_days_only: bool = True  # сб/вс MOEX закрыта — не ребаланс по расписанию/дрейфу
   volume_filter_min_ratio: float = 0.0
   atr_percentile_days: int = 90
   use_market_regime: bool = True
@@ -218,6 +220,14 @@ class PortfolioConfig:
   rebalance_decisions_log: bool = True  # писать в лог решения ребаланса (стратегия, сигнал, заявки)
   aggressive_rebalance: bool = False  # максимально агрессивный ребаланс по весам (ослабить фильтры по сигналам/отклонению)
   log_retention_days: int = 45  # хранить ротированные bot.log.*; автоочистка раз в сутки
+
+  def is_rebalance_trading_day(self, day: date) -> bool:
+    """True, если в этот день разрешён автоматический ребаланс (календарь MOEX)."""
+    if not self.rebalance_trading_days_only:
+      return True
+    from .moex_calendar import is_moex_equity_trading_day
+
+    return is_moex_equity_trading_day(day)
 
   def rebalance_day_minutes_window(self) -> tuple[int, int]:
     """Минуты суток [lo, hi] включительно, когда разрешён ребаланс.
@@ -325,6 +335,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     rebalance_window_start_minutes=p_raw.get("rebalance_window_start_minutes", 0),
     rebalance_window_end_minutes=p_raw.get("rebalance_window_end_minutes", 1090),
     trading_timezone=p_raw.get("trading_timezone", ""),
+    rebalance_trading_days_only=p_raw.get("rebalance_trading_days_only", True),
     volume_filter_min_ratio=p_raw.get("volume_filter_min_ratio", 0.0),
     atr_percentile_days=p_raw.get("atr_percentile_days", 90),
     use_market_regime=p_raw.get("use_market_regime", True),

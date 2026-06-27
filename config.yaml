@@ -53,6 +53,7 @@ portfolio:
   # Конец окна — минуты от ПОЛУНОЧИ (1090 ≈ 18:10). Если раньше rebalance_time — бот расширит до 23:59 и залогирует предупреждение.
   rebalance_window_end_minutes: 1090
   trading_timezone: "Europe/Moscow"    # Часовой пояс окна (пусто = время сервера)
+  rebalance_trading_days_only: true     # только торговые дни MOEX (пн–пт, без праздников — moex_calendar.py)
   volume_filter_min_ratio: 0.0 # Мин. объём дня / скольз. среднее объёма (0 = не фильтровать)
   atr_percentile_days: 90      # Окно для перцентилей ATR (0 = не использовать)
   use_market_regime: true      # Учитывать режим рынка (ADX: тренд/флэт) для стратегий

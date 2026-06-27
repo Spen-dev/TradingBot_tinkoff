@@ -1,0 +1,105 @@
+"""Подготовка к периоду наблюдения: baseline, бэкап и сброс learned_params (один раз).
+
+  python scripts/prepare_observation_start.py              # baseline + lock, если ещё не было
+  python scripts/prepare_observation_start.py --reset-learned  # + очистка learned_params
+  python scripts/prepare_observation_start.py --force      # повторить даже при lock
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+  sys.path.insert(0, str(ROOT))
+
+LOCK_FILE = ROOT / "data" / "observation_lock.json"
+BASELINE_FILE = ROOT / "data" / "observation_baseline.json"
+LEARNED_FILE = ROOT / "learned_params" / "params.json"
+BACKUP_DIR = ROOT / "data" / "backups"
+
+
+def _git_rev() -> str:
+  try:
+    return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, text=True).strip()
+  except Exception:
+    return ""
+
+
+def main() -> int:
+  parser = argparse.ArgumentParser(description="Старт периода наблюдения sandbox")
+  parser.add_argument("--reset-learned", action="store_true", help="Бэкап и очистка learned_params/params.json")
+  parser.add_argument("--force", action="store_true", help="Выполнить даже если observation_lock уже есть")
+  args = parser.parse_args()
+
+  if LOCK_FILE.exists() and not args.force:
+    print(f"Наблюдение уже начато ({LOCK_FILE}), пропуск. --force для повтора.")
+    return 0
+
+  from dotenv import load_dotenv
+  load_dotenv(ROOT / ".env")
+
+  from tinkoff_bot.config import load_config
+  from tinkoff_bot.broker import TinkoffBroker
+
+  cfg = load_config(str(ROOT / "config.yaml"))
+  broker = TinkoffBroker(cfg.tinkoff)
+  equity, cash, positions = broker.get_equity_snapshot(cfg.portfolio.base_currency)
+
+  dp_path = ROOT / "data" / "dynamic_portfolio.json"
+  dp_data = {}
+  if dp_path.exists():
+    try:
+      dp_data = json.loads(dp_path.read_text(encoding="utf-8"))
+    except Exception:
+      pass
+
+  if args.reset_learned:
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    if LEARNED_FILE.exists():
+      stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+      dest = BACKUP_DIR / f"learned_params_pre_observation_{stamp}.json"
+      shutil.copy2(LEARNED_FILE, dest)
+      print(f"Бэкап learned_params: {dest}")
+    LEARNED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LEARNED_FILE.write_text("{}", encoding="utf-8")
+    print("learned_params/params.json очищен")
+
+  baseline = {
+    "started_at": datetime.now().isoformat(),
+    "git_rev": _git_rev(),
+    "equity": equity,
+    "cash": cash,
+    "positions_count": len(positions),
+    "instruments": [
+      {
+        "figi": i.figi,
+        "ticker": i.ticker,
+        "target_weight": i.target_weight,
+        "strategy": str(i.strategy),
+      }
+      for i in cfg.instruments
+    ],
+    "dynamic_portfolio": {
+      "updated_at": dp_data.get("updated_at"),
+      "advisor_source": dp_data.get("advisor_source"),
+      "summary": (dp_data.get("summary") or "")[:500],
+    },
+  }
+  BASELINE_FILE.parent.mkdir(parents=True, exist_ok=True)
+  BASELINE_FILE.write_text(json.dumps(baseline, ensure_ascii=False, indent=2), encoding="utf-8")
+  print(f"Baseline: {BASELINE_FILE}")
+
+  lock = {"started_at": baseline["started_at"], "git_rev": baseline["git_rev"]}
+  LOCK_FILE.write_text(json.dumps(lock, ensure_ascii=False, indent=2), encoding="utf-8")
+  print(f"Lock: {LOCK_FILE}")
+  return 0
+
+
+if __name__ == "__main__":
+  raise SystemExit(main())

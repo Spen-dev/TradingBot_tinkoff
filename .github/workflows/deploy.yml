@@ -74,5 +74,7 @@ jobs:
               docker compose up -d
             fi
             docker compose restart bot
+            sleep 20
+            docker compose exec -T bot python scripts/prepare_observation_start.py --reset-learned || true
             docker compose ps
             curl -sf http://127.0.0.1:8000/health || true

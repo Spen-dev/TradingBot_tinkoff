@@ -111,6 +111,8 @@ async def main() -> None:
   )
   broker_timeout = max(5.0, float(getattr(cfg.portfolio, "request_timeout_seconds", 30) or 30))
 
+  fallback_alert_last_date: date | None = None
+
   async def apply_dynamic_portfolio(force: bool = False, notify: bool = False) -> str:
     if not dp_cfg or not dp_cfg.enabled:
       return "Динамический портфель отключён (dynamic_portfolio.enabled=false)."
@@ -144,6 +146,13 @@ async def main() -> None:
         logger.info("dynamic_portfolio обновлён: %s", msg)
         if notify:
           await send_alert(tg, f"📊 Состав портфеля обновлён: {msg}", "dynamic_portfolio", force=True)
+    msg_l = msg.lower()
+    if "статический конфиг" in msg or "fallback" in msg_l:
+      nonlocal fallback_alert_last_date
+      alert_day = _now_for_window().date()
+      if fallback_alert_last_date != alert_day:
+        fallback_alert_last_date = alert_day
+        await send_alert(tg, f"⚠️ Dynamic portfolio fallback: {msg}", "dynamic_fallback", force=True)
     return msg
 
   async def on_refresh_portfolio() -> str:
@@ -197,8 +206,12 @@ async def main() -> None:
       chk = 30
     lines = [
       f"📅 Авторебаланс: раз в день в окне {_mm(lo)}–{_mm(hi)} ({tz}), ориентир по времени {rt}.",
-      f"🔌 Без кнопки «Старт»: расписание и дрейф {'работают' if auto else 'не работают'} (portfolio.auto_rebalance_when_stopped).",
     ]
+    if getattr(cfg.portfolio, "rebalance_trading_days_only", True):
+      lines.append("📆 Авторебаланс по расписанию/дрейфу: только торговые дни MOEX (пн–пт, без праздников).")
+    lines.extend([
+      f"🔌 Без кнопки «Старт»: расписание и дрейф {'работают' if auto else 'не работают'} (portfolio.auto_rebalance_when_stopped).",
+    ])
     if drift:
       lines.append(f"📈 При сильном дрейфе весов — доп. ребаланс (проверка ~каждые {chk} мин внутри окна).")
     else:
@@ -920,6 +933,13 @@ async def main() -> None:
       lo, hi = cfg.portfolio.rebalance_day_minutes_window()
       return lo <= now_mins <= hi
 
+    def _can_auto_rebalance() -> bool:
+      """Окно времени + торговый день MOEX (пн–пт, если rebalance_trading_days_only)."""
+      if not _in_rebalance_window():
+        return False
+      wnow = _now_for_window()
+      return cfg.portfolio.is_rebalance_trading_day(wnow.date())
+
     _plan_first_wake = True
     while True:
       # Первый тик через 2 с — не ждать минуту после старта (проще отладить расписание и Telegram).
@@ -1048,6 +1068,8 @@ async def main() -> None:
             )
             if panic_today:
               logger.info("Авторебаланс по расписанию: пропуск (kill-switch сегодня активен)")
+            elif not cfg.portfolio.is_rebalance_trading_day(today):
+              logger.info("Авторебаланс по расписанию: пропуск (MOEX не торгует: выходной или праздник)")
             elif last_rebalance_date == today:
               logger.info("Авторебаланс по расписанию: пропуск (уже выполнялся сегодня)")
           else:
@@ -1120,7 +1142,7 @@ async def main() -> None:
                 logger.info("Автоочистка логов: удалено файлов %d (хранение %d дн.)", removed, log_retention)
             except Exception as e:
               logger.warning("Автоочистка логов: %s", e)
-          if dp_cfg and dp_cfg.enabled and _in_rebalance_window() and last_dynamic_portfolio_date != today:
+          if dp_cfg and dp_cfg.enabled and _can_auto_rebalance() and last_dynamic_portfolio_date != today:
             last_dynamic_portfolio_date = today
             try:
               await apply_dynamic_portfolio(force=False, notify=True)
@@ -1133,7 +1155,7 @@ async def main() -> None:
             or (now - last_interval_rebalance_at).total_seconds() >= ri_hours * 3600
           )
           daily_sched_due = ri_hours <= 0 and last_rebalance_date != today
-          if (interval_sched_due or daily_sched_due) and _in_rebalance_window() and not panic_today:
+          if (interval_sched_due or daily_sched_due) and _can_auto_rebalance() and not panic_today:
             logger.info(
               "Авторебаланс по расписанию: запуск (дата %s, window_now=%s, server_now=%s, interval_h=%.2f)",
               today,
@@ -1184,7 +1206,7 @@ async def main() -> None:
             last_drift_eligibility_ts is None
             or (now - last_drift_eligibility_ts).total_seconds() >= effective_check_interval * 60
           )
-          if on_drift and drift_eligible and _in_rebalance_window() and not panic_today:
+          if on_drift and drift_eligible and _can_auto_rebalance() and not panic_today:
             last_drift_eligibility_ts = now
             if last_drift_rebalance and (now - last_drift_rebalance).total_seconds() < cooldown_min * 60:
               pass
@@ -1308,9 +1330,14 @@ async def main() -> None:
             if any(r[5] for r in rows[:4]):
               bt_lines.append("* бэктест по суррогатной стратегии (ai в learned без API в отчёте)")
             bt_text = "\n".join(bt_lines) if bt_lines else "нет достаточно данных для бэктеста"
+            from tinkoff_bot.benchmark import format_weekly_benchmark_block
+            bench_text = format_weekly_benchmark_block(
+              broker, cfg.instruments, equity, base_dir, commission_rate=commission,
+            )
             msg = (
               f"📈 Недельный отчёт: портфель {equity:.2f} {cfg.portfolio.base_currency}, "
               f"сделок за неделю: {len(trades_week)}, позиций: {npos}"
+              f"\n\n🏁 Бенчмарк (бот vs buy&hold):\n{bench_text}"
               f"\n\n📊 Инструменты (оценка 30 дн.):\n{per_inst_text}"
               f"\n\n📚 Стратегии (оценка 30 дн.):\n{strat_text}"
               f"\n\n⏸ Пауза по инструментам: {pause_text}\n⏱ Пауза по риску до: {risk_text}"

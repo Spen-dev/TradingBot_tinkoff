@@ -99,3 +99,19 @@ def test_load_config_minimal():
         assert cfg.risk.max_drawdown == 0.15
     finally:
         Path(path).unlink(missing_ok=True)
+
+
+def test_is_rebalance_trading_day():
+    from datetime import date
+
+    p = PortfolioConfig(
+        base_currency="RUB",
+        rebalance_frequency="daily",
+        rebalance_time="10:00",
+        commission_rate=0.0003,
+        rebalance_trading_days_only=True,
+    )
+    assert p.is_rebalance_trading_day(date(2026, 6, 29)) is True  # Mon
+    assert p.is_rebalance_trading_day(date(2026, 6, 28)) is False  # Sun
+    p.rebalance_trading_days_only = False
+    assert p.is_rebalance_trading_day(date(2026, 6, 28)) is True
