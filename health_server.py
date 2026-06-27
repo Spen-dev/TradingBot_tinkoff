@@ -4,14 +4,43 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Callable, Dict, Any
+from urllib.parse import parse_qs, urlparse
 
 if TYPE_CHECKING:
   from .broker import TinkoffBroker, Position
   from .config import AppConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _dashboard_token_required() -> str:
+  return os.environ.get("DASHBOARD_TOKEN", "").strip()
+
+
+def _dashboard_auth_ok(request_line: str) -> bool:
+  """Если DASHBOARD_TOKEN задан — требовать ?token=... в URL."""
+  required = _dashboard_token_required()
+  if not required:
+    return True
+  parts = request_line.split()
+  if len(parts) < 2:
+    return False
+  query = parse_qs(urlparse(parts[1]).query)
+  supplied = (query.get("token") or [""])[0]
+  return supplied == required
+
+
+def _needs_dashboard_auth(request_line: str) -> bool:
+  if "GET /health" in request_line or "GET /metrics" in request_line:
+    return False
+  if "GET /dashboard" in request_line or "GET /api/" in request_line:
+    return True
+  if "GET / " in request_line and "/health" not in request_line:
+    return True
+  return False
 
 
 DASHBOARD_HTML = """
@@ -106,8 +135,13 @@ DASHBOARD_HTML = """
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
   <script>
+    const dashboardToken = new URLSearchParams(window.location.search).get('token') || '';
     async function fetchJson(url) {
-      const r = await fetch(url, { cache: 'no-store' });
+      let u = url;
+      if (dashboardToken) {
+        u += (u.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(dashboardToken);
+      }
+      const r = await fetch(u, { cache: 'no-store' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return await r.json();
     }
@@ -530,7 +564,23 @@ async def _handle_api_portfolio(broker: "TinkoffBroker | None", cfg: "AppConfig 
     _, _, positions = broker.get_equity_snapshot(cfg.portfolio.base_currency)
     by_figi = {i.figi: i for i in cfg.instruments}
     learned = load_learned_params()
+    seen: set[str] = set()
+    for ins in cfg.instruments:
+      figi = ins.figi
+      seen.add(figi)
+      pos = positions.get(figi)
+      instruments.append({
+        "figi": figi,
+        "ticker": ins.ticker,
+        "quantity": pos.quantity if pos else 0.0,
+        "price": pos.current_price if pos else 0.0,
+        "value": pos.value if pos else 0.0,
+        "target_weight": float(get_effective_target_weight(ins, learned)),
+        "strategy": str(get_effective_strategy(ins, learned, None)),
+      })
     for figi, pos in positions.items():
+      if figi in seen:
+        continue
       ins = by_figi.get(figi)
       ticker = getattr(ins, "ticker", figi) if ins else figi
       target_weight = 0.0
@@ -547,8 +597,8 @@ async def _handle_api_portfolio(broker: "TinkoffBroker | None", cfg: "AppConfig 
         "target_weight": float(target_weight),
         "strategy": strategy,
       })
-  except Exception:
-    pass
+  except Exception as e:
+    logger.warning("api/portfolio: %s", e)
   return {"instruments": instruments}
 
 
@@ -577,6 +627,9 @@ async def handle_health(
   try:
     data = await asyncio.wait_for(reader.read(1024), timeout=2.0)
     line = data.decode("utf-8", errors="ignore").split("\r\n")[0]
+    if _needs_dashboard_auth(line) and not _dashboard_auth_ok(line):
+      await _write_response(writer, 401, b"Unauthorized", "text/plain; charset=utf-8")
+      return
     # Маршрутизация по простому HTTP-line
     if "GET /metrics" in line:
       try:

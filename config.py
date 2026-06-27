@@ -162,7 +162,7 @@ class PortfolioConfig:
   self_learn_risk_penalty: float = 0.5
   self_learn_optuna_trials: int = 0  # 0 = перебор по сетке, >0 = Optuna
   self_learn_optimize_weights: bool = False
-  self_learn_weight_cap: float = 0.4
+  self_learn_weight_cap: float = 0.25
   rebalance_window_start_minutes: int = 0  # устарело, на окно ребаланса не влияет
   rebalance_window_end_minutes: int = 1090
   trading_timezone: str = ""  # например Europe/Moscow; пусто = локальное время сервера
@@ -217,7 +217,7 @@ class PortfolioConfig:
   strategy_diversity_max_share: float = 0.0
   rebalance_decisions_log: bool = True  # писать в лог решения ребаланса (стратегия, сигнал, заявки)
   aggressive_rebalance: bool = False  # максимально агрессивный ребаланс по весам (ослабить фильтры по сигналам/отклонению)
-  log_retention_days: int = 14  # хранить ротированные bot.log.*; автоочистка раз в сутки
+  log_retention_days: int = 45  # хранить ротированные bot.log.*; автоочистка раз в сутки
 
   def rebalance_day_minutes_window(self) -> tuple[int, int]:
     """Минуты суток [lo, hi] включительно, когда разрешён ребаланс.
@@ -321,7 +321,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     self_learn_risk_penalty=p_raw.get("self_learn_risk_penalty", 0.5),
     self_learn_optuna_trials=p_raw.get("self_learn_optuna_trials", 0),
     self_learn_optimize_weights=p_raw.get("self_learn_optimize_weights", False),
-    self_learn_weight_cap=p_raw.get("self_learn_weight_cap", 0.4),
+    self_learn_weight_cap=p_raw.get("self_learn_weight_cap", 0.25),
     rebalance_window_start_minutes=p_raw.get("rebalance_window_start_minutes", 0),
     rebalance_window_end_minutes=p_raw.get("rebalance_window_end_minutes", 1090),
     trading_timezone=p_raw.get("trading_timezone", ""),
@@ -374,7 +374,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     strategy_diversity_max_share=p_raw.get("strategy_diversity_max_share", 0.0),
     rebalance_decisions_log=p_raw.get("rebalance_decisions_log", True),
     aggressive_rebalance=p_raw.get("aggressive_rebalance", False),
-    log_retention_days=int(p_raw.get("log_retention_days", 14) or 14),
+    log_retention_days=int(p_raw.get("log_retention_days", 45) or 45),
   )
   risk_raw = raw.get("risk", {})
   risk_raw.setdefault("pause_after_consecutive_losses", 0)

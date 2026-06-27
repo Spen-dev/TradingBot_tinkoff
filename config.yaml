@@ -47,7 +47,7 @@ portfolio:
   self_learn_risk_penalty: 0.5 # Штраф за просадку в метрике самообучения
   self_learn_optuna_trials: 30 # Число испытаний Optuna (0 = перебор по сетке)
   self_learn_optimize_weights: true  # Подбирать целевые веса инструментов при самообучении
-  self_learn_weight_cap: 0.4   # Максимальный целевой вес одного инструмента при оптимизации
+  self_learn_weight_cap: 0.25  # = dynamic_portfolio.max_weight_per_instrument
   # Устарело: на окно не влияет. Начало окна = rebalance_time (например 10:00 — с 10:00 МСК).
   rebalance_window_start_minutes: 0
   # Конец окна — минуты от ПОЛУНОЧИ (1090 ≈ 18:10). Если раньше rebalance_time — бот расширит до 23:59 и залогирует предупреждение.
@@ -103,7 +103,7 @@ portfolio:
   strategy_change_min_delta: 0.08  # реже менять стратегию без явного выигрыша
   strategy_diversity_max_share: 0.5  # макс. доля портфеля у одной стратегии, 0 = не ограничивать
   rebalance_decisions_log: true  # писать в data/logs/rebalance_decisions.log решения ребаланса
-  log_retention_days: 14        # хранить ротированные bot.log.* (дней); автоочистка раз в сутки
+  log_retention_days: 45        # хранить ротированные bot.log.* (дней); автоочистка раз в сутки
   aggressive_rebalance: false  # боевой режим: не ослаблять фильтры ради частых сделок
 
 # Динамический состав: macro (LLM) + MOEX/Finam → pick_best; исполнение — adaptive
@@ -152,7 +152,7 @@ ops:
   block_trading_on_config_error: true   # sandbox/real: не торговать при ошибках конфига
   openrouter_min_balance_usd: 2.0
   openrouter_balance_check_hours: 24
-  macro_refresh_on_index_drop_pct: 0.03 # вне 7-дн. цикла: обновить портfель при падении индекса
+  macro_refresh_on_index_drop_pct: 0.03 # вне 7-дн. цикла: обновить портфель при падении индекса
   macro_refresh_on_news_change: true
   macro_news_check_hours: 8
   learned_params_backup_interval_hours: 24
@@ -170,7 +170,7 @@ moex:
   base_url: "https://iss.moex.com/iss"
   board: "TQBR"
 
-# OpenRouter — только macro-состав портfеля (не buy/sell на ребалансе)
+# OpenRouter — только macro-состав портфеля (не buy/sell на ребалансе)
 openrouter:
   api_key: ""                   # OPENROUTER_API_KEY в .env
   model: "google/gemini-2.5-flash-lite"  # primary: ~$0.10/1M in, structured JSON, RU/EN

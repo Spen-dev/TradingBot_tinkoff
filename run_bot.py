@@ -1373,6 +1373,13 @@ async def main() -> None:
               await send_alert(tg, "📊 Смена стратегий: " + ", ".join(f"{t} {o}→{n}" for t, o, n in changes), "strategy_changes", force=True)
           except Exception as e:
             logger.exception("Strategy selection on start: %s", e)
+          finally:
+            if strategy_selection_start_done:
+              strategy_selection_state_file.parent.mkdir(parents=True, exist_ok=True)
+              strategy_selection_state_file.write_text(
+                json.dumps({"last_date": today.isoformat()}, ensure_ascii=False),
+                encoding="utf-8",
+              )
         if strategy_selection_interval_days > 0 and not getattr(cfg.portfolio, "ai_mode", False):
           last_sel_date: date | None = None
           if strategy_selection_state_file.exists():

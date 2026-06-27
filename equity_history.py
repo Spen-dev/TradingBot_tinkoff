@@ -9,7 +9,8 @@ from typing import List
 _BASE_DIR = Path(__file__).resolve().parent
 _DATA_DIR = _BASE_DIR / "data"
 _HIST_FILE = _DATA_DIR / "equity_history.jsonl"
-_MAX_POINTS = 2000
+# ~1 точка/мин в планировщике → ~40 суток истории на графике дашборда
+_MAX_POINTS = 60_000
 
 
 @dataclass
