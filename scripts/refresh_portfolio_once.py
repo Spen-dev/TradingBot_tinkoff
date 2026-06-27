@@ -26,8 +26,6 @@ def main() -> None:
     groq_model=cfg.portfolio.groq_model,
     openrouter_model=cfg.portfolio.openrouter_model,
     finam_cfg=cfg.finam,
-    gemini_cfg=cfg.gemini,
-    groq_cfg=cfg.groq,
     openrouter_cfg=cfg.openrouter,
   )
   print(msg)

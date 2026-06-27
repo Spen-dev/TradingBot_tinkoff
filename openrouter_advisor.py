@@ -1,57 +1,51 @@
-"""Советник OpenRouter (free :free модели, OPENROUTER_API_KEY, OpenAI-compatible API)."""
+"""LLM-советник через OpenRouter (единый шлюз для всех моделей)."""
 
 from __future__ import annotations
 
 import logging
-import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from .llm_advisor_base import get_recommendations_via_llm, select_universe_via_llm
+from .openrouter_client import (
+  DEFAULT_FALLBACK_MODELS,
+  api_key,
+  chat,
+  map_legacy_model,
+  resolve_model_chain,
+)
 
 logger = logging.getLogger(__name__)
 
-_openrouter_cache: Optional[tuple] = None
+_llm_cache: Optional[tuple] = None
 
 
-def _api_key(explicit: str = "") -> str:
-  return (explicit or os.environ.get("OPENROUTER_API_KEY", "")).strip()
-
-
-def _openrouter_chat(
-  system: str,
-  user: str,
+def _make_chat_fn(
   model: str,
-  api_key: str,
-  base_url: str = "https://openrouter.ai/api/v1",
-  site_url: str = "",
-  app_name: str = "Tinkoff Trading Bot",
-) -> str:
-  if not api_key:
-    return ""
-  from openai import OpenAI
+  models: Optional[List[str]],
+  api_key_override: str,
+  base_url: str,
+  site_url: str,
+  app_name: str,
+  max_tokens: int = 2048,
+):
+  chain = resolve_model_chain(model, models)
 
-  headers: Dict[str, str] = {}
-  if site_url:
-    headers["HTTP-Referer"] = site_url
-  if app_name:
-    headers["X-Title"] = app_name
+  def chat_fn(system: str, user: str) -> str:
+    text, _used = chat(
+      system,
+      user,
+      model=chain[0],
+      models=chain[1:],
+      api_key_override=api_key_override,
+      base_url=base_url,
+      site_url=site_url,
+      app_name=app_name,
+      max_tokens=max_tokens,
+    )
+    return text
 
-  client = OpenAI(
-    api_key=api_key,
-    base_url=base_url.rstrip("/"),
-    default_headers=headers or None,
-  )
-  resp = client.chat.completions.create(
-    model=model,
-    messages=[
-      {"role": "system", "content": system},
-      {"role": "user", "content": user},
-    ],
-    temperature=0.35,
-    max_tokens=2048,
-  )
-  return (resp.choices[0].message.content or "").strip()
+  return chat_fn
 
 
 def select_universe_via_openrouter(
@@ -61,18 +55,23 @@ def select_universe_via_openrouter(
   max_instruments: int,
   max_weight: float,
   *,
-  model: str = "meta-llama/llama-3.3-70b-instruct:free",
-  api_key: str = "",
+  model: str = "openrouter/free",
+  models: Optional[List[str]] = None,
+  api_key_override: str = "",
   base_url: str = "https://openrouter.ai/api/v1",
   site_url: str = "",
   app_name: str = "Tinkoff Trading Bot",
   equity: float = 0.0,
   market_context: str = "",
 ) -> Tuple[List[Dict[str, Any]], str]:
-  key = _api_key(api_key)
-  chat = lambda s, u: _openrouter_chat(s, u, model, key, base_url, site_url, app_name)
-  return select_universe_via_llm(
-    chat,
+  key = api_key(api_key_override)
+  if not key:
+    return [], "OPENROUTER_API_KEY не задан"
+
+  primary = map_legacy_model(model)
+  chat_fn = _make_chat_fn(primary, models, key, base_url, site_url, app_name, max_tokens=1536)
+  sel, summary = select_universe_via_llm(
+    chat_fn,
     candidates=candidates,
     candidate_summary=candidate_summary,
     min_instruments=min_instruments,
@@ -82,6 +81,11 @@ def select_universe_via_openrouter(
     market_context=market_context,
     provider_label="OpenRouter",
   )
+  if sel and summary:
+    return sel, summary
+  if sel:
+    return sel, f"OpenRouter ({primary}): {len(sel)} инструментов"
+  return sel, summary
 
 
 def get_recommendations(
@@ -91,24 +95,30 @@ def get_recommendations(
   cash: float,
   last_prices: Dict[str, float],
   *,
-  model: str = "meta-llama/llama-3.3-70b-instruct:free",
-  api_key: str = "",
+  model: str = "openrouter/free",
+  models: Optional[List[str]] = None,
+  api_key_override: str = "",
   base_url: str = "https://openrouter.ai/api/v1",
   site_url: str = "",
   app_name: str = "Tinkoff Trading Bot",
   cache_hours: float = 0.0,
   history_summary: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
-  global _openrouter_cache
-  if cache_hours > 0 and _openrouter_cache is not None:
-    cached, ts = _openrouter_cache
+  global _llm_cache
+  if cache_hours > 0 and _llm_cache is not None:
+    cached, ts = _llm_cache
     if (time.time() - ts) < cache_hours * 3600:
       return dict(cached)
 
-  key = _api_key(api_key)
-  chat = lambda s, u: _openrouter_chat(s, u, model, key, base_url, site_url, app_name)
+  key = api_key(api_key_override)
+  if not key:
+    logger.debug("OPENROUTER_API_KEY не задан, LLM-советник отключён")
+    return {}
+
+  primary = map_legacy_model(model)
+  chat_fn = _make_chat_fn(primary, models, key, base_url, site_url, app_name)
   out = get_recommendations_via_llm(
-    chat,
+    chat_fn,
     instruments,
     positions,
     equity,
@@ -118,5 +128,17 @@ def get_recommendations(
     provider_label="OpenRouter",
   )
   if cache_hours > 0 and out:
-    _openrouter_cache = (out, time.time())
+    _llm_cache = (out, time.time())
   return out
+
+
+# Алиасы для обратной совместимости
+select_universe_via_llm_gateway = select_universe_via_openrouter
+get_llm_recommendations = get_recommendations
+
+__all__ = [
+  "select_universe_via_openrouter",
+  "get_recommendations",
+  "get_llm_recommendations",
+  "DEFAULT_FALLBACK_MODELS",
+]

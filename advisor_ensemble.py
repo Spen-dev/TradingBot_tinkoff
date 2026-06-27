@@ -1,4 +1,4 @@
-"""Выбор лучшего советника среди DeepSeek, Finam, MOEX, Gemini, Groq, OpenRouter."""
+"""Выбор лучшего советника: количественные (Finam, MOEX) + LLM через OpenRouter."""
 
 from __future__ import annotations
 
@@ -104,6 +104,15 @@ def pick_best_portfolio(
   return best_name, best_sel, msg, best_score
 
 
+def _use_llm(
+  use_deepseek: bool,
+  use_gemini: bool,
+  use_groq: bool,
+  use_openrouter: bool,
+) -> bool:
+  return use_openrouter or use_deepseek or use_gemini or use_groq
+
+
 def get_best_recommendations(
   instruments: List[Any],
   positions: Dict[str, Any],
@@ -124,80 +133,34 @@ def get_best_recommendations(
   market_client: Optional[CompositeMarketClient] = None,
   finam_history_days: int = 30,
 ) -> Tuple[Dict[str, Dict[str, Any]], str]:
-  """Сравнивает рекомендации всех советников, возвращает лучший набор."""
-  deepseek_kwargs = deepseek_kwargs or {}
-  gemini_kwargs = gemini_kwargs or {}
-  groq_kwargs = groq_kwargs or {}
+  """Сравнивает рекомендации советников, возвращает лучший набор."""
   openrouter_kwargs = openrouter_kwargs or {}
   proposals: List[Tuple[str, Dict[str, Dict[str, Any]]]] = []
 
-  if use_deepseek:
+  if _use_llm(use_deepseek, use_gemini, use_groq, use_openrouter):
     try:
-      from .deepseek_advisor import get_recommendations as ds_get
+      from .openrouter_advisor import get_recommendations as llm_get
 
-      ds = ds_get(
+      # Единый LLM-запрос через OpenRouter (fallback-модели внутри клиента)
+      llm_kwargs = dict(openrouter_kwargs)
+      if not llm_kwargs.get("model"):
+        for legacy in (deepseek_kwargs or {}, gemini_kwargs or {}, groq_kwargs or {}):
+          if legacy.get("model"):
+            llm_kwargs.setdefault("model", legacy["model"])
+            break
+      llm_kwargs.setdefault("cache_hours", llm_kwargs.get("cache_hours", 0))
+      recs = llm_get(
         instruments=instruments,
         positions=positions,
         equity=equity,
         cash=cash,
         last_prices=last_prices,
-        **deepseek_kwargs,
+        **llm_kwargs,
       )
-      if ds:
-        proposals.append(("deepseek", ds))
+      if recs:
+        proposals.append(("llm", recs))
     except Exception as e:
-      logger.warning("DeepSeek recommendations: %s", e)
-
-  if use_gemini:
-    try:
-      from .gemini_advisor import get_recommendations as gm_get
-
-      gm = gm_get(
-        instruments=instruments,
-        positions=positions,
-        equity=equity,
-        cash=cash,
-        last_prices=last_prices,
-        **gemini_kwargs,
-      )
-      if gm:
-        proposals.append(("gemini", gm))
-    except Exception as e:
-      logger.warning("Gemini recommendations: %s", e)
-
-  if use_groq:
-    try:
-      from .groq_advisor import get_recommendations as gq_get
-
-      gq = gq_get(
-        instruments=instruments,
-        positions=positions,
-        equity=equity,
-        cash=cash,
-        last_prices=last_prices,
-        **groq_kwargs,
-      )
-      if gq:
-        proposals.append(("groq", gq))
-    except Exception as e:
-      logger.warning("Groq recommendations: %s", e)
-
-  if use_openrouter:
-    try:
-      from .openrouter_advisor import get_recommendations as or_get
-
-      or_recs = or_get(
-        instruments=instruments,
-        positions=positions,
-        equity=equity,
-        cash=cash,
-        last_prices=last_prices,
-        **openrouter_kwargs,
-      )
-      if or_recs:
-        proposals.append(("openrouter", or_recs))
-    except Exception as e:
-      logger.warning("OpenRouter recommendations: %s", e)
+      logger.warning("LLM (OpenRouter) recommendations: %s", e)
 
   client = market_client or CompositeMarketClient()
   if use_finam and client.finam and getattr(client.finam, "configured", False):

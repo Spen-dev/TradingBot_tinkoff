@@ -106,7 +106,12 @@ class GroqConfig:
 @dataclass
 class OpenRouterConfig:
   api_key: str = ""
-  model: str = "meta-llama/llama-3.3-70b-instruct:free"
+  model: str = "openrouter/free"
+  models: List[str] = field(default_factory=lambda: [
+    "openrouter/free",
+    "deepseek/deepseek-r1:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+  ])
   base_url: str = "https://openrouter.ai/api/v1"
   site_url: str = ""
 
@@ -200,7 +205,7 @@ class PortfolioConfig:
   deepseek_model: str = "deepseek-chat"
   gemini_model: str = "gemini-2.0-flash"
   groq_model: str = "llama-3.3-70b-versatile"
-  openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
+  openrouter_model: str = "openrouter/free"
   llm_cache_hours: float = 2.0  # кэш LLM-советников (часы)
   auto_strategy_selection_on_start: bool = False  # при старте робота один раз выбрать лучшую стратегию по бэктесту для каждого инструмента
   strategy_selection_days: int = 90  # глубина истории (дней) для выбора стратегии
@@ -442,9 +447,15 @@ def load_config(path: str = "config.yaml") -> AppConfig:
   )
 
   or_raw = raw.get("openrouter") or {}
+  or_models_raw = or_raw.get("models") or [
+    "openrouter/free",
+    "deepseek/deepseek-r1:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+  ]
   openrouter = OpenRouterConfig(
     api_key=os.getenv("OPENROUTER_API_KEY", or_raw.get("api_key", "")),
-    model=str(or_raw.get("model", "meta-llama/llama-3.3-70b-instruct:free") or "meta-llama/llama-3.3-70b-instruct:free"),
+    model=str(or_raw.get("model", "openrouter/free") or "openrouter/free"),
+    models=[str(m) for m in or_models_raw if m],
     base_url=str(or_raw.get("base_url", "https://openrouter.ai/api/v1") or "https://openrouter.ai/api/v1"),
     site_url=str(or_raw.get("site_url", "") or ""),
   )

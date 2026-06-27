@@ -9,7 +9,7 @@ def test_select_universe_without_api_key():
     min_instruments=2,
     max_instruments=2,
     max_weight=0.5,
-    api_key="",
+    api_key_override="",
   )
   assert sel == []
-  assert "OpenRouter" in msg or msg
+  assert "OPENROUTER" in msg.upper()

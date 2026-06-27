@@ -88,18 +88,18 @@ portfolio:
   alert_drawdown_pct: 0.05     # Алерт при просадке портфеля >= N% (0=выкл)
   alert_daily_loss_pct: 0.02   # Алерт при дневном убытке >= N% от старта дня (0=выкл)
   alert_live_ping_hours: 24    # Раз в N ч отправлять «Робот работает» (песочница как в бою)
-  use_deepseek_advisor: true # DeepSeek: LLM-рекомендации по портфелю
+  use_deepseek_advisor: false # legacy: LLM идёт через OpenRouter
   use_finam_advisor: true     # Finam Trade API: количественные сигналы (momentum+Sharpe)
   use_moex_advisor: true      # MOEX ISS: бесплатные количественные сигналы (без токена)
-  use_gemini_advisor: true    # Google Gemini LLM (GEMINI_API_KEY)
-  use_groq_advisor: true       # Groq LLM — Llama (GROQ_API_KEY)
-  use_openrouter_advisor: true # OpenRouter LLM — free :free модели (OPENROUTER_API_KEY)
+  use_gemini_advisor: false   # legacy: через OpenRouter
+  use_groq_advisor: false     # legacy: через OpenRouter
+  use_openrouter_advisor: true # Единый LLM-шлюз (OPENROUTER_API_KEY)
   pick_best_advisor: true     # true = выбрать лучший советник из всех активных
-  deepseek_model: "deepseek-chat"  # Модель DeepSeek (ключ DEEPSEEK_API_KEY в .env)
-  gemini_model: "gemini-2.0-flash"
-  groq_model: "llama-3.3-70b-versatile"
-  openrouter_model: "meta-llama/llama-3.3-70b-instruct:free"  # или openrouter/free
-  llm_cache_hours: 2.0         # кэш LLM-советников (часы)
+  deepseek_model: "deepseek/deepseek-chat"  # OpenRouter slug (если use_deepseek_advisor=true)
+  gemini_model: "google/gemini-2.0-flash-exp:free"
+  groq_model: "meta-llama/llama-3.3-70b-instruct:free"
+  openrouter_model: "openrouter/free"  # primary; fallback — openrouter.models
+  llm_cache_hours: 2.0         # кэш LLM (часы)
   auto_strategy_selection_on_start: true # true = при старте выбрать лучшую стратегию по бэктесту для каждого инструмента
   strategy_selection_days: 90    # глубина истории (дней) для выбора стратегии
   strategy_selection_interval_days: 14  # пересчёт выбора стратегии раз в N дней (0 = только при старте и /select_strategy)
@@ -120,11 +120,11 @@ dynamic_portfolio:
   max_weight_per_instrument: 0.30
   default_strategy: deepseek
   fallback_to_static: true
-  use_deepseek: true
+  use_deepseek: false         # LLM → OpenRouter (use_openrouter)
   use_finam: true
   use_moex: true
-  use_gemini: true
-  use_groq: true
+  use_gemini: false
+  use_groq: false
   use_openrouter: true
   pick_best_advisor: true
   candidates:
@@ -162,12 +162,17 @@ groq:
   api_key: ""                   # GROQ_API_KEY в .env
   model: "llama-3.3-70b-versatile"
 
-# OpenRouter — единый LLM-шлюз, бесплатные :free модели (https://openrouter.ai/keys)
+# OpenRouter — единый LLM-шлюз (https://openrouter.ai/keys)
 openrouter:
   api_key: ""                   # OPENROUTER_API_KEY в .env
-  model: "meta-llama/llama-3.3-70b-instruct:free"  # или openrouter/free
+  model: "openrouter/free"      # primary-модель
+  models:                       # fallback при 429/ошибке
+    - openrouter/free
+    - deepseek/deepseek-r1:free
+    - meta-llama/llama-3.3-70b-instruct:free
+    - google/gemma-3-12b-it:free
   base_url: "https://openrouter.ai/api/v1"
-  site_url: ""                  # опционально, для HTTP-Referer
+  site_url: ""
 
 risk:
   max_drawdown: 0.15           # Макс. допустимая просадка от пика (15%) — блокировка торговли

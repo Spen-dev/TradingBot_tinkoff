@@ -392,6 +392,7 @@ class PortfolioManager:
         )
         mc = CompositeMarketClient(finam_client=fc, moex_client=MoexClient())
         llm_cache = getattr(self.cfg, "llm_cache_hours", 2.0) or 0
+        or_cfg = getattr(self, "openrouter_cfg", None)
         recs, advisor_used = get_best_recommendations(
           instruments=instruments_list,
           positions=positions,
@@ -404,28 +405,12 @@ class PortfolioManager:
           use_gemini=use_gemini,
           use_groq=use_groq,
           use_openrouter=use_openrouter,
-          deepseek_kwargs={
-            "model": getattr(self.cfg, "deepseek_model", "deepseek-chat"),
-            "cache_hours": getattr(self.cfg, "deepseek_cache_hours", 0) or 0,
-            "history_summary": history_summary,
-          },
-          gemini_kwargs={
-            "model": getattr(self.cfg, "gemini_model", "gemini-2.0-flash"),
-            "api_key": getattr(getattr(self, "gemini_cfg", None), "api_key", ""),
-            "cache_hours": llm_cache,
-            "history_summary": history_summary,
-          },
-          groq_kwargs={
-            "model": getattr(self.cfg, "groq_model", "llama-3.3-70b-versatile"),
-            "api_key": getattr(getattr(self, "groq_cfg", None), "api_key", ""),
-            "cache_hours": llm_cache,
-            "history_summary": history_summary,
-          },
           openrouter_kwargs={
-            "model": getattr(self.cfg, "openrouter_model", "meta-llama/llama-3.3-70b-instruct:free"),
-            "api_key": getattr(getattr(self, "openrouter_cfg", None), "api_key", ""),
-            "base_url": getattr(getattr(self, "openrouter_cfg", None), "base_url", "https://openrouter.ai/api/v1"),
-            "site_url": getattr(getattr(self, "openrouter_cfg", None), "site_url", ""),
+            "model": getattr(self.cfg, "openrouter_model", "openrouter/free"),
+            "models": list(getattr(or_cfg, "models", None) or []) if or_cfg else None,
+            "api_key_override": getattr(or_cfg, "api_key", "") if or_cfg else "",
+            "base_url": getattr(or_cfg, "base_url", "https://openrouter.ai/api/v1") if or_cfg else "https://openrouter.ai/api/v1",
+            "site_url": getattr(or_cfg, "site_url", "") if or_cfg else "",
             "cache_hours": llm_cache,
             "history_summary": history_summary,
           },

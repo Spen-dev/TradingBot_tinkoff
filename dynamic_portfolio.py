@@ -104,59 +104,32 @@ def select_universe_via_deepseek(
   min_instruments: int,
   max_instruments: int,
   max_weight: float,
-  model: str = "deepseek-chat",
+  model: str = "deepseek/deepseek-chat",
   equity: float = 0.0,
   market_context: str = "",
+  *,
+  models: Optional[List[str]] = None,
+  api_key: str = "",
+  base_url: str = "https://openrouter.ai/api/v1",
+  site_url: str = "",
 ) -> Tuple[List[Dict[str, Any]], str]:
-  """Запрос к DeepSeek: выбрать состав портфеля из кандидатов."""
-  api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-  if not api_key:
-    return [], "DEEPSEEK_API_KEY не задан"
+  """Выбор портфеля через OpenRouter (DeepSeek и fallback-модели)."""
+  from .openrouter_advisor import select_universe_via_openrouter
 
-  lines = [f"Капитал портфеля: {equity:.0f} RUB.", "Кандидаты (тикер: метрики):"]
-  for t in candidates:
-    lines.append(f"  {t}: {candidate_summary.get(t, 'нет данных')}")
-  if market_context:
-    lines.append(f"\nКонтекст рынка: {market_context}")
-
-  prompt = f"""Ты — портфельный аналитик российского фондового рынка (MOEX).
-
-{chr(10).join(lines)}
-
-Выбери оптимальный портфель ТОЛЬКО из перечисленных тикеров-кандидатов.
-
-Верни JSON без markdown:
-{{"portfolio": [{{"ticker": "<TICKER>", "target_weight": <0..1>, "reason": "<кратко>"}}], "summary": "<1-2 предложения>"}}
-
-Правила:
-- Выбери от {min_instruments} до {max_instruments} акций из списка кандидатов (не добавляй другие).
-- target_weight в сумме = 1.0.
-- Максимальный вес одной акции: {max_weight:.0%}.
-- Диверсификация по секторам, избегай концентрации в одной отрасли.
-- Учитывай momentum, волатильность и просадку; не гонись только за доходностью 5d."""
-
-  try:
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-    resp = client.chat.completions.create(
-      model=model,
-      messages=[
-        {"role": "system", "content": "Ты отвечаешь только валидным JSON без пояснений."},
-        {"role": "user", "content": prompt},
-      ],
-      temperature=0.35,
-      max_tokens=1536,
-    )
-    data = _parse_deepseek_json(resp.choices[0].message.content or "")
-    raw = data.get("portfolio") or data.get("recommendations") or []
-    summary = str(data.get("summary") or "").strip()
-    allowed = {t.upper() for t in candidates}
-    filtered = [r for r in raw if (r.get("ticker") or "").strip().upper() in allowed]
-    normalized = normalize_weights(filtered, max_weight, min_instruments, max_instruments)
-    return normalized, summary
-  except Exception as e:
-    logger.warning("DeepSeek dynamic portfolio: %s", e)
-    return [], str(e)
+  return select_universe_via_openrouter(
+    candidates,
+    candidate_summary,
+    min_instruments,
+    max_instruments,
+    max_weight,
+    model=model,
+    models=models,
+    api_key_override=api_key,
+    base_url=base_url,
+    site_url=site_url,
+    equity=equity,
+    market_context=market_context,
+  )
 
 
 def instruments_from_selections(
@@ -316,19 +289,28 @@ def refresh_dynamic_portfolio(
 
   proposals: List[Tuple[str, List[Dict[str, Any]], str]] = []
 
-  if dp.use_deepseek:
-    ds_sel, ds_summary = select_universe_via_deepseek(
+  use_llm = dp.use_openrouter or dp.use_deepseek or dp.use_gemini or dp.use_groq
+  if use_llm:
+    from .openrouter_advisor import select_universe_via_openrouter
+
+    or_primary = openrouter_model or getattr(openrouter_cfg, "model", "openrouter/free") if openrouter_cfg else openrouter_model
+    or_models = list(getattr(openrouter_cfg, "models", None) or []) if openrouter_cfg else None
+    llm_sel, llm_summary = select_universe_via_openrouter(
       candidates=candidates,
       candidate_summary=summary_map,
       min_instruments=dp.min_instruments,
       max_instruments=dp.max_instruments,
       max_weight=dp.max_weight_per_instrument,
-      model=deepseek_model,
+      model=or_primary,
+      models=or_models,
+      api_key_override=getattr(openrouter_cfg, "api_key", "") if openrouter_cfg else "",
+      base_url=getattr(openrouter_cfg, "base_url", "https://openrouter.ai/api/v1") if openrouter_cfg else "https://openrouter.ai/api/v1",
+      site_url=getattr(openrouter_cfg, "site_url", "") if openrouter_cfg else "",
       equity=equity,
       market_context=market_context,
     )
-    if ds_sel:
-      proposals.append(("deepseek", ds_sel, ds_summary))
+    if llm_sel:
+      proposals.append(("llm", llm_sel, llm_summary))
 
   if dp.use_finam and finam_client.configured:
     fm_sel, fm_summary = finam_advisor.select_portfolio_via_finam(
@@ -353,59 +335,6 @@ def refresh_dynamic_portfolio(
     )
     if mx_sel:
       proposals.append(("moex", mx_sel, mx_summary))
-
-  if dp.use_gemini:
-    from .gemini_advisor import select_universe_via_gemini
-
-    gm_sel, gm_summary = select_universe_via_gemini(
-      candidates=candidates,
-      candidate_summary=summary_map,
-      min_instruments=dp.min_instruments,
-      max_instruments=dp.max_instruments,
-      max_weight=dp.max_weight_per_instrument,
-      model=gemini_model,
-      api_key=getattr(gemini_cfg, "api_key", "") if gemini_cfg else "",
-      equity=equity,
-      market_context=market_context,
-    )
-    if gm_sel:
-      proposals.append(("gemini", gm_sel, gm_summary))
-
-  if dp.use_groq:
-    from .groq_advisor import select_universe_via_groq
-
-    gq_sel, gq_summary = select_universe_via_groq(
-      candidates=candidates,
-      candidate_summary=summary_map,
-      min_instruments=dp.min_instruments,
-      max_instruments=dp.max_instruments,
-      max_weight=dp.max_weight_per_instrument,
-      model=groq_model,
-      api_key=getattr(groq_cfg, "api_key", "") if groq_cfg else "",
-      equity=equity,
-      market_context=market_context,
-    )
-    if gq_sel:
-      proposals.append(("groq", gq_sel, gq_summary))
-
-  if dp.use_openrouter:
-    from .openrouter_advisor import select_universe_via_openrouter
-
-    or_sel, or_summary = select_universe_via_openrouter(
-      candidates=candidates,
-      candidate_summary=summary_map,
-      min_instruments=dp.min_instruments,
-      max_instruments=dp.max_instruments,
-      max_weight=dp.max_weight_per_instrument,
-      model=openrouter_model,
-      api_key=getattr(openrouter_cfg, "api_key", "") if openrouter_cfg else "",
-      base_url=getattr(openrouter_cfg, "base_url", "https://openrouter.ai/api/v1") if openrouter_cfg else "https://openrouter.ai/api/v1",
-      site_url=getattr(openrouter_cfg, "site_url", "") if openrouter_cfg else "",
-      equity=equity,
-      market_context=market_context,
-    )
-    if or_sel:
-      proposals.append(("openrouter", or_sel, or_summary))
 
   selections: List[Dict[str, Any]] = []
   advisor_source = ""
