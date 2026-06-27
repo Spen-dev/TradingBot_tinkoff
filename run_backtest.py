@@ -40,7 +40,7 @@ def main() -> None:
   print(f"Окно бэктеста: {from_dt.date()} .. {to_dt.date()} ({args.days} дней)")
   print(f"Комиссия: {commission:.5f}")
   learned = load_learned_params()
-  print("(учтён learned_params; deepseek → суррогат для симуляции)")
+  print("(учтён learned_params; ai → суррогат для симуляции)")
   print()
 
   rows = []

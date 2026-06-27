@@ -571,6 +571,7 @@ async def handle_health(
   cfg: "AppConfig | None",
   is_ready: Callable[[], bool],
   get_started_at: Callable[[], "datetime | None"] = lambda: None,
+  is_config_ok: Callable[[], bool] | None = None,
 ) -> None:
   """Обработчик запросов: GET /health или GET / -> JSON; GET /metrics -> Prometheus."""
   try:
@@ -626,9 +627,9 @@ async def handle_health(
           broker_ok = True
         except Exception:
           pass
-      config_ok = cfg is not None
+      config_ok = (is_config_ok() if is_config_ok else True) and cfg is not None
       ready = is_ready() if callable(is_ready) else True
-      status = 200 if (broker_ok and config_ok) else 503
+      status = 200 if (broker_ok and config_ok and ready) else 503
       body = json.dumps({"broker_ok": broker_ok, "config_ok": config_ok, "ready": ready}, ensure_ascii=False).encode("utf-8")
       await _write_response(writer, status, body, "application/json; charset=utf-8")
       return
@@ -649,10 +650,11 @@ async def run_health_server(
   cfg: "AppConfig | None",
   is_ready: Callable[[], bool] = lambda: True,
   get_started_at: Callable[[], "datetime | None"] = lambda: None,
+  is_config_ok: Callable[[], bool] | None = None,
 ) -> asyncio.Server:
   """Запустить TCP-сервер для /health."""
   server = await asyncio.start_server(
-    lambda r, w: handle_health(r, w, broker, cfg, is_ready, get_started_at),
+    lambda r, w: handle_health(r, w, broker, cfg, is_ready, get_started_at, is_config_ok),
     host=host,
     port=port,
   )

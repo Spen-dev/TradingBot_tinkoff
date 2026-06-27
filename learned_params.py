@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from .config import InstrumentConfig
+from .strategy_names import normalize_strategy_name
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +65,12 @@ def get_effective_strategy(instrument: InstrumentConfig, learned: Dict[str, Dict
   if regime in ("trend", "range", "weak_trend"):
     key = f"strategy_{regime}"
     if override.get(key):
-      return override[key]
+      return normalize_strategy_name(override[key])
     if regime == "weak_trend" and override.get("strategy_trend"):
-      return override["strategy_trend"]
+      return normalize_strategy_name(override["strategy_trend"])
   if "strategy" in override:
-    return override["strategy"]
-  return instrument.strategy
+    return normalize_strategy_name(override["strategy"])
+  return normalize_strategy_name(instrument.strategy)
 
 
 def get_effective_target_weight(instrument: InstrumentConfig, learned: Dict[str, Dict[str, Any]]) -> float:

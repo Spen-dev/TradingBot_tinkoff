@@ -18,7 +18,8 @@ from .learned_params import (
   save_learned_params,
   get_effective_params,
 )
-from .strategy import build_strategy, Signal
+from .strategy import Signal, build_strategy
+from .strategy_names import AI_STRATEGY, is_ai_strategy, normalize_strategy_name
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ _LEARNED_META_KEYS = frozenset({
 
 
 def _strategy_params_only(merged_params: Dict[str, Any]) -> Dict[str, Any]:
-  """Убрать из слияния learned метаданные, иначе strategy=deepseek затрёт суррогат в бэктесте."""
+  """Убрать из слияния learned метаданные, иначе strategy=ai затрёт суррогат в бэктесте."""
   out = dict(merged_params)
   for k in _LEARNED_META_KEYS:
     out.pop(k, None)
@@ -195,28 +196,28 @@ def _tune_strategy_surrogate(
   """
   Стратегия для бэктеста в tune_instrument_params и флаг «не писать strategy в learned».
 
-  deepseek (и combined с deepseek) в бэктесте даёт только hold (заглушка) → 0 сделок и
+  ai (и combined с ai) в бэктесте даёт только hold (заглушка) → 0 сделок и
   «параметры не подобраны». Подбираем на суррогате (стратегия из конфига или adaptive),
   поле strategy в learned не перезаписываем.
 
-  Без deepseek возвращаем исходный eff_raw (str или list), а не только первый элемент списка.
+  Без ai возвращаем исходный eff_raw (str или list), а не только первый элемент списка.
   """
-  uses_deepseek = eff_strategy == "deepseek" or (
-    isinstance(eff_raw, list) and "deepseek" in eff_raw
+  uses_ai = is_ai_strategy(eff_strategy) or (
+    isinstance(eff_raw, list) and any(is_ai_strategy(x) for x in eff_raw)
   )
-  if not uses_deepseek:
+  if not uses_ai:
     if isinstance(eff_raw, str):
       return eff_raw, False
     if isinstance(eff_raw, list):
       return eff_raw, False
     return eff_strategy, False
-  base = inst.strategy
+  base = normalize_strategy_name(inst.strategy)
   if isinstance(base, list):
-    others = [x for x in base if x != "deepseek"]
+    others = [x for x in base if not is_ai_strategy(x)]
     if others:
       return str(others[0]), True
     return "adaptive", True
-  if isinstance(base, str) and base != "deepseek":
+  if isinstance(base, str) and not is_ai_strategy(base):
     return base, True
   return "adaptive", True
 
@@ -226,10 +227,10 @@ def instrument_config_for_historical_signals(
   learned: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Tuple[InstrumentConfig, bool]:
   """
-  Конфиг для _get_signals_for_df / бэктеста: учитывает learned и суррогат для deepseek.
+  Конфиг для _get_signals_for_df / бэктеста: учитывает learned и суррогат для ai.
 
   Возвращает (instrument, used_surrogate). Без этого weekly-бэктест и run_backtest
-  давали 0 сделок при strategy=deepseek в learned.
+  давали 0 сделок при strategy=ai в learned.
   """
   learned = learned if learned is not None else load_learned_params()
   eff_raw = learned.get(inst.figi, {}).get("strategy", inst.strategy)
@@ -284,31 +285,25 @@ STRATEGY_CANDIDATES = ["momentum", "mean_reversion", "rsi", "breakout", "adaptiv
 
 
 def strategy_selection_llm_kwargs(cfg: Any) -> Dict[str, Any]:
-  """Параметры LLM (OpenRouter) для run_strategy_selection из AppConfig."""
+  """Параметры OpenRouter для run_strategy_selection из AppConfig."""
   portfolio = cfg.portfolio
   or_cfg = getattr(cfg, "openrouter", None)
-  allow_llm = bool(
-    getattr(portfolio, "use_openrouter_advisor", False)
-    or getattr(portfolio, "use_deepseek_advisor", False)
-  )
   return {
-    "allow_llm": allow_llm,
-    "allow_deepseek": allow_llm,
-    "llm_model": getattr(portfolio, "openrouter_model", "openrouter/free"),
+    "allow_llm": bool(getattr(portfolio, "use_openrouter_advisor", True)),
+    "llm_model": getattr(portfolio, "openrouter_model", "google/gemini-2.5-flash-lite"),
     "llm_models": list(getattr(or_cfg, "models", None) or []) if or_cfg else None,
     "llm_api_key": getattr(or_cfg, "api_key", "") if or_cfg else "",
     "llm_base_url": getattr(or_cfg, "base_url", "https://openrouter.ai/api/v1") if or_cfg else "https://openrouter.ai/api/v1",
     "llm_site_url": getattr(or_cfg, "site_url", "") if or_cfg else "",
-    "deepseek_model": getattr(portfolio, "deepseek_model", "deepseek-chat"),
   }
 
 
-def _score_deepseek_vs_validation(
+def _score_ai_vs_validation(
   inst: InstrumentConfig,
   df_val: pd.DataFrame,
   rec: Dict[str, Any],
 ) -> Tuple[float, float]:
-  """Оценка рекомендации DeepSeek по совпадению с движением цены на валидации. Возвращает (combined_score, display_value)."""
+  """Оценка LLM-рекомендации по совпадению с движением цены на валидации. Возвращает (combined_score, display_value)."""
   if len(df_val) < 2:
     return -1e9, 0.0
   val_return = float(df_val["close"].iloc[-1] / df_val["close"].iloc[0] - 1.0)
@@ -338,14 +333,12 @@ def run_strategy_selection(
   use_sharpe: bool = True,
   min_trades: int = 5,
   risk_penalty: float = 0.5,
-  allow_deepseek: bool = False,
   allow_llm: bool = False,
-  llm_model: str = "openrouter/free",
+  llm_model: str = "google/gemini-2.5-flash-lite",
   llm_models: Optional[List[str]] = None,
   llm_api_key: str = "",
   llm_base_url: str = "https://openrouter.ai/api/v1",
   llm_site_url: str = "",
-  deepseek_model: str = "deepseek-chat",
   strategy_change_min_delta: float = 0.05,
   strategy_diversity_max_share: float = 0.0,
 ) -> Tuple[str, List[Tuple[str, str, str]]]:
@@ -358,7 +351,7 @@ def run_strategy_selection(
   changes: List[Tuple[str, str, str]] = []
   weight_by_strategy: Dict[str, float] = {}
   llm_recs: Dict[str, Dict[str, Any]] = {}
-  use_llm = allow_llm or allow_deepseek
+  use_llm = allow_llm
   if use_llm:
     try:
       equity, cash, positions = broker.get_equity_snapshot()
@@ -367,16 +360,14 @@ def run_strategy_selection(
         pos = positions.get(i.figi)
         last_prices[i.figi] = getattr(pos, "current_price", None) or broker.get_last_price(i.figi) or 0.0
       from .openrouter_advisor import get_recommendations as get_llm_recommendations
-      from .openrouter_client import map_legacy_model
 
-      primary = llm_model or map_legacy_model(deepseek_model)
       llm_recs = get_llm_recommendations(
         instruments=instruments,
         positions=positions,
         equity=equity,
         cash=cash,
         last_prices=last_prices,
-        model=primary,
+        model=llm_model,
         models=llm_models,
         api_key_override=llm_api_key,
         base_url=llm_base_url,
@@ -404,9 +395,11 @@ def run_strategy_selection(
       if rl_path.exists():
         candidates.append("rl")
     if use_llm and inst.figi in llm_recs:
-      candidates.append("deepseek")
+      candidates.append(AI_STRATEGY)
     eff = learned_before.get(inst.figi, {}).get("strategy", inst.strategy)
-    current_strategy = eff if isinstance(eff, str) else (eff[0] if isinstance(eff, list) and eff else "adaptive")
+    current_strategy = normalize_strategy_name(
+      eff if isinstance(eff, str) else (eff[0] if isinstance(eff, list) and eff else "adaptive")
+    )
     tw = getattr(inst, "target_weight", 1.0 / max(len(instruments), 1))
     best_name: Optional[str] = None
     best_score = -1e9
@@ -423,17 +416,17 @@ def run_strategy_selection(
             diversity_penalty = 0.0
         else:
           diversity_penalty = 0.0
-        if strat_name == "deepseek":
+        if strat_name == AI_STRATEGY:
           rec = llm_recs.get(inst.figi)
           if not rec:
             continue
-          combined, display_val = _score_deepseek_vs_validation(inst, df_val, rec)
+          combined, display_val = _score_ai_vs_validation(inst, df_val, rec)
           combined -= diversity_penalty
           if combined > best_score:
             best_score = combined
-            best_name = "deepseek"
+            best_name = AI_STRATEGY
             best_sharpe = display_val
-          if strat_name == current_strategy:
+          if strat_name == current_strategy or is_ai_strategy(current_strategy):
             current_score = combined
           continue
         params: Dict[str, Any] = {"strategy": strat_name}
@@ -467,12 +460,12 @@ def run_strategy_selection(
       except Exception as e:
         logger.debug("Стратегия %s для %s: %s", strat_name, inst.ticker, e)
         continue
-    # Текущая стратегия не в списке кандидатов (rl без файла, deepseek без ответа API,
+    # Текущая стратегия не в списке кандидатов (rl без файла, ai без ответа API,
     # volume_weighted/index/… вне STRATEGY_CANDIDATES) — иначе current_score остаётся None
     # и сравнение дало бы ложное переключение на любого «оценённого» кандидата.
     if current_strategy not in candidates:
       weight_by_strategy[current_strategy] = weight_by_strategy.get(current_strategy, 0) + tw
-      if current_strategy == "deepseek":
+      if is_ai_strategy(current_strategy):
         reason = "нет LLM-рекомендации OpenRouter для FIGI в этом прогоне"
       elif current_strategy == "rl":
         reason = "rl не в кандидатах (нет rl_model_path или файл модели не найден)"
@@ -490,8 +483,8 @@ def run_strategy_selection(
         update_learned_params(inst.figi, {"strategy": best_name})
         changes.append((inst.ticker, current_strategy, best_name))
       weight_by_strategy[chosen] = weight_by_strategy.get(chosen, 0) + tw
-      if best_name == "deepseek":
-        lines.append(f"  {inst.ticker}: deepseek (совпадение с валидацией)")
+      if best_name == AI_STRATEGY:
+        lines.append(f"  {inst.ticker}: ai (совпадение с валидацией)")
       else:
         lines.append(f"  {inst.ticker}: {best_name} (Sharpe≈{best_sharpe:.3f})")
     else:
@@ -802,7 +795,7 @@ def run_retrain(
           to_save.pop("strategy", None)
         if not to_save:
           lines.append(
-            f"  {inst.ticker}: deepseek — сетка не дала параметров кроме типа стратегии, learned не менялся"
+            f"  {inst.ticker}: ai — сетка не дала параметров кроме типа стратегии, learned не менялся"
           )
           continue
         # Сначала Sharpe на полном окне — нужен и для guard-rail, и для весов (как у суррогата)
@@ -829,7 +822,7 @@ def run_retrain(
         results.append((inst, to_save, sharpe, rets))
         if strip_strategy_from_best:
           lines.append(
-            f"  {inst.ticker}: {to_save} (Sharpe≈{sharpe:.3f}, подбор по суррогату, strategy=deepseek сохранена)"
+            f"  {inst.ticker}: {to_save} (Sharpe≈{sharpe:.3f}, подбор по суррогату, strategy=ai сохранена)"
           )
         else:
           lines.append(f"  {inst.ticker}: {to_save} (Sharpe≈{sharpe:.3f})")

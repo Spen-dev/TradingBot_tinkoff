@@ -1,6 +1,30 @@
 """Тесты динамического портфеля."""
-from tinkoff_bot.dynamic_portfolio import normalize_weights, get_candidates
+from tinkoff_bot.dynamic_portfolio import normalize_weights, get_candidates, instruments_from_selections
 from tinkoff_bot.config import DynamicPortfolioConfig, InstrumentConfig
+
+
+class _StubBroker:
+  def resolve_ticker(self, ticker: str):
+    if ticker.upper() == "BAD":
+      raise ValueError("Ticker not found: BAD")
+    return f"FIGI_{ticker}", 1
+
+
+def test_instruments_from_selections_skips_unknown_ticker():
+  sel = [
+    {"ticker": "SBER", "target_weight": 0.6},
+    {"ticker": "BAD", "target_weight": 0.4},
+  ]
+  out = instruments_from_selections(sel, _StubBroker(), default_strategy="adaptive")
+  assert len(out) == 1
+  assert out[0].ticker == "SBER"
+  assert out[0].strategy == "adaptive"
+
+
+def test_instruments_from_selections_normalizes_legacy_ai_strategy():
+  sel = [{"ticker": "SBER", "target_weight": 1.0}]
+  out = instruments_from_selections(sel, _StubBroker(), default_strategy="deepseek")
+  assert out[0].strategy == "ai"
 
 
 def test_normalize_weights_caps_and_sums():

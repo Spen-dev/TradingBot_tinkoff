@@ -20,13 +20,11 @@ def main() -> None:
     broker,
     cfg.instruments,
     force=True,
-    history_days=cfg.portfolio.deepseek_history_days,
-    deepseek_model=cfg.portfolio.deepseek_model,
-    gemini_model=cfg.portfolio.gemini_model,
-    groq_model=cfg.portfolio.groq_model,
+    history_days=cfg.portfolio.llm_history_days,
     openrouter_model=cfg.portfolio.openrouter_model,
     finam_cfg=cfg.finam,
     openrouter_cfg=cfg.openrouter,
+    macro_news_cfg=getattr(cfg, "macro_news", None),
   )
   print(msg)
   print("changed:", changed)

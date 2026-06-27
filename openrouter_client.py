@@ -14,17 +14,16 @@ DEFAULT_APP_NAME = "Tinkoff Trading Bot"
 
 # Цепочка моделей при 429/ошибке провайдера (платные, без лимита free-tier)
 DEFAULT_FALLBACK_MODELS = [
-  "google/gemini-2.5-flash-lite",
   "deepseek/deepseek-chat",
   "meta-llama/llama-3.3-70b-instruct",
-  "google/gemini-2.5-flash",
+  "google/gemini-2.5-flash-lite",
 ]
 
 # Старые имена моделей → OpenRouter slug
 LEGACY_MODEL_MAP = {
   "deepseek-chat": "deepseek/deepseek-chat",
   "deepseek-reasoner": "deepseek/deepseek-r1",
-  "gemini-2.0-flash": "google/gemini-2.0-flash-exp:free",
+  "gemini-2.0-flash": "google/gemini-2.0-flash",
   "llama-3.3-70b-versatile": "meta-llama/llama-3.3-70b-instruct",
 }
 

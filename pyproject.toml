@@ -16,6 +16,7 @@ dependencies = [
   "gymnasium",
   "stable-baselines3",
   "openai",
+  "optuna",
 ]
 
 [project.optional-dependencies]

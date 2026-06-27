@@ -1,11 +1,20 @@
 # Tinkoff Trading Bot
 
-Робот для автоматического ребаланса портфеля по стратегиям (RL, momentum, mean reversion и др.) с интеграцией Тинькофф Инвестиций и Telegram.
+Автоматический ребаланс портфеля MOEX (Tinkoff Invest API): стратегии adaptive / RL / ai, динамический состав (Finam, MOEX ISS, macro-новости, OpenRouter LLM), Telegram-управление, Docker на VPS.
+
+## Возможности
+
+- **Брокер:** Tinkoff Invest (sandbox / real), retry при сбоях API
+- **Стратегии:** adaptive, momentum, mean reversion, RL, **ai** (OpenRouter: Gemini Flash Lite + fallback)
+- **Динамический состав:** Finam, MOEX, macro-события (RSS → LLM), pick_best_advisor
+- **Автоматизация (`ops`):** автостарт sandbox, healthcheck, бэкап learned_params, алерт баланса OpenRouter, macro-триггеры, watchdog → restart
+- **Деплой:** Docker Compose, GitHub Actions → VPS ([DEPLOY.md](DEPLOY.md))
 
 ## Требования
 
 - Python 3.10+
-- Токены: Тинькофф Инвестиции (API), Telegram Bot
+- Токены: Tinkoff Invest API, Telegram Bot
+- Опционально: `OPENROUTER_API_KEY`, `FINAM_API_TOKEN`
 
 ## Установка
 
@@ -34,20 +43,23 @@ pytest tests/ -v
    - `TELEGRAM_TOKEN` — токен бота Telegram
    - `TELEGRAM_ADMIN_CHAT_ID` — ID чата, с которого разрешено управление
 
-   Опционально: `SANDBOX_TARGET_CASH` (целевой баланс в рублях в песочнице), `DRY_RUN=true` (без реальных заявок).
+   Опционально: `OPENROUTER_API_KEY` (LLM и macro-советник), `FINAM_API_TOKEN`, `SANDBOX_TARGET_CASH`, `DRY_RUN=true`.
 
 2. **config.yaml** — режим, портфель, риски, инструменты. Все параметры подписаны в файле. Режим `mode: sandbox` или `mode: real` (в real ужесточаются лимиты рисков).
 
 ## Docker и деплой на VPS
 
-- Сборка и запуск в контейнере: `docker compose up -d` (перед этим создайте `.env` из `.env.example`).
-- Полная инструкция по переносу в Git, сборке образа и деплою на VPS (в т.ч. [U1 Host](https://u1host.com/ru)) — в [DEPLOY.md](DEPLOY.md).
+- Сборка и запуск: `docker compose up -d` (перед этим создайте `.env` из `.env.example`).
+- Health-check: `curl http://localhost:8000/health`
+- Проверка API: `python scripts/check_apis.py`
+- Push в `main` → автодеплой на VPS (GitHub Actions, secrets `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`).
+- Подробно: [DEPLOY.md](DEPLOY.md).
 
 ## Запуск
 
 - **Торговый робот:**  
   `python run_bot.py`  
-  После запуска откройте Telegram, нажмите **Старт** — начнутся ребаланс и мониторинг. **СТОП** ставит паузу (процесс не завершается); полный выход — Ctrl+C.
+  В **sandbox** с `ops.auto_start_sandbox: true` торговля стартует сама после перезапуска. Иначе нажмите **Старт** в Telegram. **СТОП** — пауза; выход — Ctrl+C.
 
 - **Обучение RL-моделей:**  
   `python train_rl.py --figi BBG004730ZJ9 --days 365 --out data/rl_model.zip --timesteps 50000`  
@@ -111,4 +123,4 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-При деплое в git можно добавить CI (например, GitHub Actions), который запускает эти тесты на каждый push/PR.
+При деплое в git на каждый push в `main` запускаются pytest (локально) и GitHub Actions deploy на VPS.

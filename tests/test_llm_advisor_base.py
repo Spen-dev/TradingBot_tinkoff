@@ -1,4 +1,4 @@
-"""Тесты парсинга LLM-ответов (Gemini/Groq base)."""
+"""Тесты парсинга LLM-ответов (OpenRouter / llm_advisor_base)."""
 from tinkoff_bot.llm_advisor_base import normalize_weights, parse_llm_json
 
 

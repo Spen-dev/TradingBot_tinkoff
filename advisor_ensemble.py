@@ -8,8 +8,56 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import finam_advisor, moex_advisor
 from .market_data_client import CompositeMarketClient
 from .quant_advisor import score_bars
+from .strategy_names import is_ai_strategy
 
 logger = logging.getLogger(__name__)
+
+_REGIME_STRATEGY_KEYS = ("strategy_trend", "strategy_range", "strategy_weak_trend")
+
+
+def _config_uses_llm_strategy(instrument: Any) -> bool:
+  return is_ai_strategy(getattr(instrument, "strategy", None))
+
+
+def _learned_uses_llm_strategy(learned_entry: Dict[str, Any]) -> bool:
+  if not learned_entry:
+    return False
+  if is_ai_strategy(learned_entry.get("strategy")):
+    return True
+  return any(is_ai_strategy(learned_entry.get(key)) for key in _REGIME_STRATEGY_KEYS)
+
+
+def instruments_use_llm_strategy(
+  instruments: List[Any],
+  learned: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> bool:
+  """True, если хотя бы один инструмент торгуется через LLM (strategy=ai) по конфигу или learned."""
+  learned = learned or {}
+  for ins in instruments:
+    if _config_uses_llm_strategy(ins):
+      return True
+    figi = getattr(ins, "figi", "")
+    if figi and _learned_uses_llm_strategy(learned.get(figi, {})):
+      return True
+  return False
+
+
+def resolve_rebalance_advisor_flags(
+  *,
+  use_finam: bool,
+  use_moex: bool,
+  use_openrouter: bool,
+  instruments: List[Any],
+  learned: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Tuple[bool, bool, bool, bool]:
+  """
+  Флаги для ребаланса: (run_ensemble, use_finam, use_moex, use_openrouter).
+  LLM на ребалансе — только если есть инструменты со стратегией ai; Finam/MOEX — всегда при включении.
+  """
+  llm_strategy = instruments_use_llm_strategy(instruments, learned)
+  llm_enabled = use_openrouter and llm_strategy
+  run_ensemble = use_finam or use_moex or llm_enabled
+  return run_ensemble, bool(use_finam), bool(use_moex), bool(llm_enabled)
 
 
 def _portfolio_daily_returns(
@@ -104,15 +152,6 @@ def pick_best_portfolio(
   return best_name, best_sel, msg, best_score
 
 
-def _use_llm(
-  use_deepseek: bool,
-  use_gemini: bool,
-  use_groq: bool,
-  use_openrouter: bool,
-) -> bool:
-  return use_openrouter or use_deepseek or use_gemini or use_groq
-
-
 def get_best_recommendations(
   instruments: List[Any],
   positions: Dict[str, Any],
@@ -120,15 +159,9 @@ def get_best_recommendations(
   cash: float,
   last_prices: Dict[str, float],
   *,
-  use_deepseek: bool = True,
   use_finam: bool = True,
   use_moex: bool = True,
-  use_gemini: bool = True,
-  use_groq: bool = True,
   use_openrouter: bool = True,
-  deepseek_kwargs: Optional[Dict[str, Any]] = None,
-  gemini_kwargs: Optional[Dict[str, Any]] = None,
-  groq_kwargs: Optional[Dict[str, Any]] = None,
   openrouter_kwargs: Optional[Dict[str, Any]] = None,
   market_client: Optional[CompositeMarketClient] = None,
   finam_history_days: int = 30,
@@ -137,17 +170,11 @@ def get_best_recommendations(
   openrouter_kwargs = openrouter_kwargs or {}
   proposals: List[Tuple[str, Dict[str, Dict[str, Any]]]] = []
 
-  if _use_llm(use_deepseek, use_gemini, use_groq, use_openrouter):
+  if use_openrouter:
     try:
       from .openrouter_advisor import get_recommendations as llm_get
 
-      # Единый LLM-запрос через OpenRouter (fallback-модели внутри клиента)
       llm_kwargs = dict(openrouter_kwargs)
-      if not llm_kwargs.get("model"):
-        for legacy in (deepseek_kwargs or {}, gemini_kwargs or {}, groq_kwargs or {}):
-          if legacy.get("model"):
-            llm_kwargs.setdefault("model", legacy["model"])
-            break
       llm_kwargs.setdefault("cache_hours", llm_kwargs.get("cache_hours", 0))
       recs = llm_get(
         instruments=instruments,

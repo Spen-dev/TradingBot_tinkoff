@@ -173,3 +173,61 @@ def get_recommendations_via_llm(
   except Exception as e:
     logger.warning("%s advisor: %s", provider_label, e)
     return {}
+
+
+def select_universe_via_macro_events(
+  chat_fn: ChatFn,
+  *,
+  candidates: List[str],
+  candidate_summary: Dict[str, str],
+  events_text: str,
+  min_instruments: int,
+  max_instruments: int,
+  max_weight: float,
+  equity: float = 0.0,
+) -> Tuple[List[Dict[str, Any]], str]:
+  """Портфель MOEX с упором на мировые/макро-события и новости."""
+  lines = [
+    f"Капитал портфеля: {equity:.0f} RUB." if equity > 0 else "Капитал: не указан.",
+    "Кандидаты MOEX (тикер: технические метрики):",
+  ]
+  for t in candidates:
+    key = t.upper()
+    lines.append(f"  {key}: {candidate_summary.get(key, candidate_summary.get(t, 'нет данных'))}")
+
+  user_prompt = f"""Ты — macro-аналитик портфеля акций MOEX. Твоя задача — собрать портфель с учётом мировых событий и новостей.
+
+{chr(10).join(lines)}
+
+Недавние новости и события (геополитика, санкции, нефть/газ, ставки ЦБ, сырьё, MOEX, секторы):
+{events_text}
+
+Выбери портфель ТОЛЬКО из перечисленных тикеров-кандидатов.
+
+Верни JSON без markdown:
+{{"portfolio": [{{"ticker": "<TICKER>", "target_weight": <0..1>, "reason": "<связь с событиями>"}}], "summary": "<1-2 предложения: ключевые события и логика>"}}
+
+Правила:
+- От {min_instruments} до {max_instruments} акций, только из списка кандидатов.
+- target_weight в сумме = 1.0, макс. вес одной акции: {max_weight:.0%}.
+- Учитывай сектора: нефть/газ (ROSN, TATN, LKOH, NVTK), металлы (GMKN, NLMK, CHMF, PLZL), банки (SBER, VTBR), потреб (MGNT, MTSS) и т.д.
+- Снижай вес секторов под негативными геополитическими/сырьевыми рисками; повышай при позитивном макро для РФ/MOEX.
+- Не выдумывай факты beyond заголовков; при неясности — диверсифицируй."""
+
+  try:
+    text = chat_fn(
+      "Ты macro-аналитик MOEX. Отвечай только валидным JSON без markdown.",
+      user_prompt,
+    )
+    if not text:
+      return [], "macro: пустой ответ LLM"
+    data = parse_llm_json(text)
+    raw = data.get("portfolio") or data.get("recommendations") or []
+    summary = str(data.get("summary") or "").strip()
+    allowed = {t.upper() for t in candidates}
+    filtered = [r for r in raw if (r.get("ticker") or "").strip().upper() in allowed]
+    normalized = normalize_weights(filtered, max_weight, min_instruments, max_instruments)
+    return normalized, summary
+  except Exception as e:
+    logger.warning("macro dynamic portfolio: %s", e)
+    return [], str(e)

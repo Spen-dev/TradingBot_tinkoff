@@ -1,4 +1,4 @@
-"""Динамический состав портфеля по рекомендациям DeepSeek."""
+"""Динамический состав портфеля через советников (Finam / MOEX / OpenRouter / Macro)."""
 
 from __future__ import annotations
 
@@ -11,20 +11,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import DynamicPortfolioConfig, InstrumentConfig
+from .strategy_names import normalize_strategy_name
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_STATE_FILE = "data/dynamic_portfolio.json"
-
-
-def _parse_deepseek_json(text: str) -> dict:
-  text = (text or "").strip()
-  if text.startswith("```"):
-    parts = text.split("```")
-    text = parts[1] if len(parts) > 1 else text
-    if text.startswith("json"):
-      text = text[4:]
-  return json.loads(text.strip())
 
 
 def normalize_weights(
@@ -49,7 +40,7 @@ def normalize_weights(
   cleaned = cleaned[: max(1, max_instruments)]
   if len(cleaned) < min_instruments:
     logger.warning(
-      "DeepSeek вернул %d инструментов (минимум %d), используем как есть",
+      "LLM вернул %d инструментов (минимум %d), используем как есть",
       len(cleaned),
       min_instruments,
     )
@@ -69,7 +60,7 @@ def build_candidate_summary(
   tickers: List[str],
   history_days: int = 10,
 ) -> Dict[str, str]:
-  """Краткая статистика по кандидатам для промпта DeepSeek."""
+  """Краткая статистика по кандидатам для промпта LLM."""
   summary: Dict[str, str] = {}
   to_dt = datetime.now()
   from_dt = to_dt - timedelta(days=max(5, history_days))
@@ -98,59 +89,32 @@ def build_candidate_summary(
   return summary
 
 
-def select_universe_via_deepseek(
-  candidates: List[str],
-  candidate_summary: Dict[str, str],
-  min_instruments: int,
-  max_instruments: int,
-  max_weight: float,
-  model: str = "deepseek/deepseek-chat",
-  equity: float = 0.0,
-  market_context: str = "",
-  *,
-  models: Optional[List[str]] = None,
-  api_key: str = "",
-  base_url: str = "https://openrouter.ai/api/v1",
-  site_url: str = "",
-) -> Tuple[List[Dict[str, Any]], str]:
-  """Выбор портфеля через OpenRouter (DeepSeek и fallback-модели)."""
-  from .openrouter_advisor import select_universe_via_openrouter
-
-  return select_universe_via_openrouter(
-    candidates,
-    candidate_summary,
-    min_instruments,
-    max_instruments,
-    max_weight,
-    model=model,
-    models=models,
-    api_key_override=api_key,
-    base_url=base_url,
-    site_url=site_url,
-    equity=equity,
-    market_context=market_context,
-  )
-
-
 def instruments_from_selections(
   selections: List[Dict[str, Any]],
   broker: Any,
-  default_strategy: str = "deepseek",
+  default_strategy: str = "adaptive",
 ) -> List[InstrumentConfig]:
-  """Преобразует выбор DeepSeek в InstrumentConfig с FIGI и лотами."""
+  """Преобразует выбор советника в InstrumentConfig с FIGI и лотами."""
+  strategy = normalize_strategy_name(default_strategy)
   out: List[InstrumentConfig] = []
   for row in selections:
-    ticker = row["ticker"]
-    figi, lot = broker.resolve_ticker(ticker)
+    ticker = (row.get("ticker") or "").strip().upper()
+    if not ticker:
+      continue
+    try:
+      figi, lot = broker.resolve_ticker(ticker)
+    except Exception as e:
+      logger.warning("dynamic_portfolio: пропуск %s — не найден FIGI: %s", ticker, e)
+      continue
     strategy_params: Dict[str, Any] = {}
-    if default_strategy == "rl":
+    if strategy == "rl":
       strategy_params["rl_model_path"] = f"data/rl_model_{ticker}.zip"
     out.append(
       InstrumentConfig(
         figi=figi,
         ticker=ticker,
         lot=lot,
-        strategy=default_strategy,
+        strategy=strategy,
         target_weight=float(row["target_weight"]),
         strategy_params=strategy_params,
       )
@@ -203,7 +167,7 @@ def instruments_from_state(state: dict) -> List[InstrumentConfig]:
         figi=row["figi"],
         ticker=row["ticker"],
         lot=int(row.get("lot", 1) or 1),
-        strategy=row.get("strategy", "deepseek"),
+        strategy=normalize_strategy_name(row.get("strategy", "adaptive")),
         target_weight=float(row.get("target_weight", 0)),
         strategy_params=dict(row.get("strategy_params") or {}),
       )
@@ -236,15 +200,11 @@ def refresh_dynamic_portfolio(
   *,
   force: bool = False,
   history_days: int = 10,
-  deepseek_model: str = "deepseek-chat",
-  gemini_model: str = "gemini-2.0-flash",
-  groq_model: str = "llama-3.3-70b-versatile",
-  openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free",
+  openrouter_model: str = "google/gemini-2.5-flash-lite",
   base_dir: Optional[Path] = None,
   finam_cfg: Any = None,
-  gemini_cfg: Any = None,
-  groq_cfg: Any = None,
   openrouter_cfg: Any = None,
+  macro_news_cfg: Any = None,
 ) -> Tuple[List[InstrumentConfig], str, bool]:
   """
   Обновляет состав портфеля через все активные советники; при pick_best_advisor — лучший по бэктесту.
@@ -289,11 +249,11 @@ def refresh_dynamic_portfolio(
 
   proposals: List[Tuple[str, List[Dict[str, Any]], str]] = []
 
-  use_llm = dp.use_openrouter or dp.use_deepseek or dp.use_gemini or dp.use_groq
+  use_llm = dp.use_openrouter
   if use_llm:
     from .openrouter_advisor import select_universe_via_openrouter
 
-    or_primary = openrouter_model or getattr(openrouter_cfg, "model", "openrouter/free") if openrouter_cfg else openrouter_model
+    or_primary = openrouter_model or getattr(openrouter_cfg, "model", "google/gemini-2.5-flash-lite") if openrouter_cfg else openrouter_model
     or_models = list(getattr(openrouter_cfg, "models", None) or []) if openrouter_cfg else None
     llm_sel, llm_summary = select_universe_via_openrouter(
       candidates=candidates,
@@ -311,6 +271,34 @@ def refresh_dynamic_portfolio(
     )
     if llm_sel:
       proposals.append(("llm", llm_sel, llm_summary))
+
+  if dp.use_macro and macro_news_cfg:
+    from .macro_advisor import select_portfolio_via_macro
+    from .openrouter_client import api_key as or_api_key
+
+    or_key = or_api_key(getattr(openrouter_cfg, "api_key", "") if openrouter_cfg else "")
+    if or_key:
+      or_primary = openrouter_model or getattr(openrouter_cfg, "model", "google/gemini-2.5-flash-lite") if openrouter_cfg else openrouter_model
+      or_models = list(getattr(openrouter_cfg, "models", None) or []) if openrouter_cfg else None
+      macro_sel, macro_summary = select_portfolio_via_macro(
+        candidates,
+        summary_map,
+        min_instruments=dp.min_instruments,
+        max_instruments=dp.max_instruments,
+        max_weight=dp.max_weight_per_instrument,
+        macro_cfg=macro_news_cfg,
+        model=or_primary,
+        models=or_models,
+        api_key_override=getattr(openrouter_cfg, "api_key", "") if openrouter_cfg else "",
+        base_url=getattr(openrouter_cfg, "base_url", "https://openrouter.ai/api/v1") if openrouter_cfg else "https://openrouter.ai/api/v1",
+        site_url=getattr(openrouter_cfg, "site_url", "") if openrouter_cfg else "",
+        equity=equity,
+        base_dir=base,
+      )
+      if macro_sel:
+        proposals.append(("macro", macro_sel, macro_summary))
+    else:
+      logger.debug("macro advisor: OPENROUTER_API_KEY не задан")
 
   if dp.use_finam and finam_client.configured:
     fm_sel, fm_summary = finam_advisor.select_portfolio_via_finam(
@@ -363,6 +351,15 @@ def refresh_dynamic_portfolio(
     return fallback_instruments, "Советники не вернули состав, изменений нет", False
 
   instruments = instruments_from_selections(selections, broker, dp.default_strategy)
+  if not instruments:
+    msg = "Советник вернул тикеры, но FIGI не найдены — fallback"
+    logger.warning("dynamic_portfolio: %s", msg)
+    if dp.fallback_to_static and fallback_instruments:
+      if state and instruments_from_state(state):
+        return instruments_from_state(state), msg + " (кэш)", False
+      return fallback_instruments, msg, False
+    return fallback_instruments, msg, False
+
   tickers = ", ".join(f"{i.ticker} {i.target_weight:.0%}" for i in instruments)
   msg = combined_summary or f"{advisor_source} выбрал: {tickers}"
   if advisor_source and "выбран" not in msg.lower():

@@ -58,7 +58,7 @@ def test_pick_best_portfolio_prefers_higher_sharpe():
   weak = [{"ticker": "GMKN", "target_weight": 1.0}]
   assert score_portfolio_proposal(market, good) > score_portfolio_proposal(market, weak)
   name, sel, msg, score = pick_best_portfolio(
-    [("deepseek", weak, "ds"), ("finam", good, "fm")],
+    [("llm", weak, "ds"), ("finam", good, "fm")],
     market,
   )
   assert name == "finam"

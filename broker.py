@@ -1,7 +1,9 @@
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple, TypeVar
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import logging
+import time
 
 import pandas as pd
 from decimal import Decimal
@@ -15,10 +17,54 @@ from tinkoff.invest import (
   OrderType,
   MoneyValue,
 )
+from tinkoff.invest.exceptions import RequestError
 from tinkoff.invest.utils import decimal_to_quotation
 from tinkoff.invest.sandbox.client import SandboxClient
 
 from .config import TinkoffConfig
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+_BROKER_RETRY_ATTEMPTS = 3
+_BROKER_RETRY_DELAY_SEC = 1.0
+
+
+def _is_retryable_broker_error(exc: BaseException) -> bool:
+  if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+    return True
+  msg = str(exc).lower()
+  if any(x in msg for x in ("unavailable", "deadline", "timeout", "temporarily", "503", "502", "504", "429")):
+    return True
+  if isinstance(exc, RequestError):
+    # Бизнес-ошибки заявок (300xx) не повторяем.
+    if any(x in msg for x in ("300", "invalid", "not enough", "insufficient")):
+      return False
+    return True
+  return False
+
+
+def _with_broker_retry(fn: Callable[[], T], *, label: str = "broker") -> T:
+  last: BaseException | None = None
+  for attempt in range(_BROKER_RETRY_ATTEMPTS):
+    try:
+      return fn()
+    except Exception as e:
+      last = e
+      if attempt >= _BROKER_RETRY_ATTEMPTS - 1 or not _is_retryable_broker_error(e):
+        raise
+      logger.warning(
+        "%s: попытка %d/%d не удалась (%s), повтор через %.1f с",
+        label,
+        attempt + 1,
+        _BROKER_RETRY_ATTEMPTS,
+        e,
+        _BROKER_RETRY_DELAY_SEC,
+      )
+      time.sleep(_BROKER_RETRY_DELAY_SEC)
+  assert last is not None
+  raise last
 
 
 def _quotation_to_float(q: Quotation) -> float:
@@ -115,22 +161,25 @@ class TinkoffBroker:
     чтобы не смешивать get_positions и get_portfolio (иначе возможно cash > equity).
     Если total_amount_portfolio нет или валюта не совпала — fallback: cash из get_positions, equity = cash + бумаги.
     """
-    resp = self._fetch_portfolio_raw()
-    positions = self._positions_from_response(resp)
-    sec_total = sum(p.value for p in positions.values())
-    tap = getattr(resp, "total_amount_portfolio", None)
-    cur = str(getattr(tap, "currency", "") or "").upper() if tap is not None else ""
-    if tap is not None and cur == currency.upper():
-      equity = _money_to_float(tap)
-      cash = max(0.0, equity - sec_total)
+    def _fetch() -> Tuple[float, float, Dict[str, Position]]:
+      resp = self._fetch_portfolio_raw()
+      positions = self._positions_from_response(resp)
+      sec_total = sum(p.value for p in positions.values())
+      tap = getattr(resp, "total_amount_portfolio", None)
+      cur = str(getattr(tap, "currency", "") or "").upper() if tap is not None else ""
+      if tap is not None and cur == currency.upper():
+        equity = _money_to_float(tap)
+        cash = max(0.0, equity - sec_total)
+        return equity, cash, positions
+      cash = self._cash_from_positions_api(currency)
+      if cash <= 0 and sec_total <= 0:
+        m = getattr(resp, "total_amount_currencies", None)
+        if m is not None and getattr(m, "currency", "").upper() == currency.upper():
+          cash = _money_to_float(m)
+      equity = cash + sec_total
       return equity, cash, positions
-    cash = self._cash_from_positions_api(currency)
-    if cash <= 0 and sec_total <= 0:
-      m = getattr(resp, "total_amount_currencies", None)
-      if m is not None and getattr(m, "currency", "").upper() == currency.upper():
-        cash = _money_to_float(m)
-    equity = cash + sec_total
-    return equity, cash, positions
+
+    return _with_broker_retry(_fetch, label="get_equity_snapshot")
 
   def get_cash_balance(self, currency: str = "RUB") -> float:
     """Свободные средства в одной методике со get_equity_snapshot (предпочтительно остаток от total_amount_portfolio)."""
@@ -184,12 +233,15 @@ class TinkoffBroker:
     if price is not None and order_type == OrderType.ORDER_TYPE_LIMIT:
       kwargs["price"] = decimal_to_quotation(Decimal(str(price)))
 
-    with self._client() as client:
-      if self._cfg.use_sandbox:
-        resp = client.sandbox.post_sandbox_order(**kwargs)
-      else:
-        resp = client.orders.post_order(**kwargs)
-    return resp.order_id
+    def _post() -> str:
+      with self._client() as client:
+        if self._cfg.use_sandbox:
+          resp = client.sandbox.post_sandbox_order(**kwargs)
+        else:
+          resp = client.orders.post_order(**kwargs)
+      return resp.order_id
+
+    return _with_broker_retry(_post, label="place_order")
 
   def get_open_orders(self) -> List[Dict[str, str]]:
     """Список активных заявок: [{"order_id": ..., "figi": ..., "order_type": ...}, ...]."""
@@ -221,12 +273,15 @@ class TinkoffBroker:
 
   def get_last_price(self, figi: str) -> float:
     """Последняя цена инструмента для расчёта заявок при отсутствии позиции."""
-    with self._client() as client:
-      resp = client.market_data.get_last_prices(figi=[figi])
-    for lp in getattr(resp, "last_prices", []) or []:
-      if lp.figi == figi:
-        return _quotation_to_float(lp.price)
-    return 0.0
+    def _fetch() -> float:
+      with self._client() as client:
+        resp = client.market_data.get_last_prices(figi=[figi])
+      for lp in getattr(resp, "last_prices", []) or []:
+        if lp.figi == figi:
+          return _quotation_to_float(lp.price)
+      return 0.0
+
+    return _with_broker_retry(_fetch, label="get_last_price")
 
   def get_order_book_mid(self, figi: str) -> tuple[float | None, float | None, float | None]:
     """(best_bid, best_ask, mid) по стакану. При ошибке возвращает (None, None, None)."""

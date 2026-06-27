@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 from .broker import TinkoffBroker
 from .config import InstrumentConfig
 from .rl_env import obs_from_candles
-
+from .strategy_names import AI_STRATEGY, LEGACY_AI_STRATEGY_ALIASES, is_ai_strategy, normalize_strategy_name
 
 @dataclass
 class Signal:
@@ -425,10 +425,14 @@ class AdaptiveStrategy(BaseStrategy):
         return Signal(figi=self.instrument.figi, side="hold", strength=0.0)
 
 
-class DeepSeekStubStrategy(BaseStrategy):
-  """Заглушка: сигнал по инструменту со стратегией deepseek формируется в portfolio из API DeepSeek."""
+class AIStrategyStub(BaseStrategy):
+  """Заглушка: сигнал по инструменту со стратегией ai формируется в portfolio из LLM (OpenRouter)."""
   def compute_signal(self, now: datetime) -> Signal:
     return Signal(figi=self.instrument.figi, side="hold", strength=0.0)
+
+
+# Обратная совместимость
+DeepSeekStubStrategy = AIStrategyStub
 
 
 class RLStrategy(BaseStrategy):
@@ -504,6 +508,7 @@ class CombinedStrategy(BaseStrategy):
 
 
 def _build_one(name: str, instrument: InstrumentConfig, broker: TinkoffBroker) -> BaseStrategy:
+  name = normalize_strategy_name(name) if isinstance(name, str) else name
   if name == "mean_reversion":
     return MeanReversionStrategy(instrument, broker)
   if name == "momentum":
@@ -528,15 +533,15 @@ def _build_one(name: str, instrument: InstrumentConfig, broker: TinkoffBroker) -
     return AdaptiveStrategy(instrument, broker)
   if name == "rl":
     return RLStrategy(instrument, broker)
-  if name == "deepseek":
-    # Реальный сигнал формируется в portfolio из DeepSeek API; здесь заглушка для CombinedStrategy и т.п.
-    return DeepSeekStubStrategy(instrument, broker)
+  if name == "ai":
+    return AIStrategyStub(instrument, broker)
   raise ValueError(f"Unknown strategy: {name}")
 
 
 def build_strategy(
   name: Union[str, List[str]], instrument: InstrumentConfig, broker: TinkoffBroker
 ) -> BaseStrategy:
+  name = normalize_strategy_name(name)
   if isinstance(name, list):
     weights = (instrument.strategy_params or {}).get("combined_weights")
     return CombinedStrategy(instrument, broker, name, weights=weights)

@@ -157,7 +157,7 @@ class TelegramController:
       "/last_errors — последние строки из лога (ошибки)\n"
       "/dashboard — ссылка на веб-дашборд\n"
       "/daily_digest_now — принудительно отправить дневной дайджест\n"
-      "/refresh_portfolio — обновить состав портфеля через DeepSeek\n"
+      "/refresh_portfolio — обновить состав портфеля (Finam/MOEX/OpenRouter)\n"
       "/help — этот список команд\n\n"
       "Кнопки:\n"
       "🟢 Старт — запуск робота, то же что /start\n"

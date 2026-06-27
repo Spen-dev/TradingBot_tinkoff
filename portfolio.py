@@ -13,6 +13,7 @@ from .config import InstrumentConfig, PortfolioConfig
 from .broker import TinkoffBroker, Position
 from .risk import RiskManager, RiskState
 from .strategy import build_strategy, Signal
+from .strategy_names import AI_STRATEGY, is_ai_strategy
 from .learned_params import load_learned_params, get_effective_params, get_effective_strategy, get_effective_target_weight
 
 logger = logging.getLogger(__name__)
@@ -194,8 +195,6 @@ class PortfolioManager:
     broker: TinkoffBroker,
     risk: RiskManager,
     finam_cfg: Any = None,
-    gemini_cfg: Any = None,
-    groq_cfg: Any = None,
     openrouter_cfg: Any = None,
   ):
     self.cfg = cfg
@@ -203,8 +202,6 @@ class PortfolioManager:
     self.broker = broker
     self.risk = risk
     self.finam_cfg = finam_cfg
-    self.gemini_cfg = gemini_cfg
-    self.groq_cfg = groq_cfg
     self.openrouter_cfg = openrouter_cfg
 
   def update_instruments(self, instruments: List[InstrumentConfig]) -> None:
@@ -279,27 +276,29 @@ class PortfolioManager:
         prices_for_target[figi] = pos.current_price if pos else self.broker.get_last_price(figi)
     targets = self._target_values(equity, prices_for_target)
 
-    # Рекомендации советников (DeepSeek / Finam / MOEX / Gemini / Groq — лучший)
-    deepseek_recommendations: Dict[str, Dict[str, Any]] = {}
-    use_deepseek = getattr(self.cfg, "use_deepseek_advisor", False)
+    # Рекомендации советников (Finam / MOEX всегда; LLM — только для strategy=ai)
+    advisor_recommendations: Dict[str, Dict[str, Any]] = {}
     use_finam = getattr(self.cfg, "use_finam_advisor", False)
     use_moex = getattr(self.cfg, "use_moex_advisor", True)
-    use_gemini = getattr(self.cfg, "use_gemini_advisor", True)
-    use_groq = getattr(self.cfg, "use_groq_advisor", True)
     use_openrouter = getattr(self.cfg, "use_openrouter_advisor", True)
     instruments_list = list(self.instruments_cfg.values())
-    has_advisor_strategy = any(
-      (getattr(c, "strategy", None) == "deepseek")
-      or (isinstance(getattr(c, "strategy", None), list) and "deepseek" in getattr(c, "strategy", []))
-      for c in instruments_list
+    learned_for_advisors = load_learned_params()
+    from .advisor_ensemble import get_best_recommendations, resolve_rebalance_advisor_flags
+
+    run_advisors, use_finam, use_moex, use_openrouter = resolve_rebalance_advisor_flags(
+      use_finam=use_finam,
+      use_moex=use_moex,
+      use_openrouter=use_openrouter,
+      instruments=instruments_list,
+      learned=learned_for_advisors,
     )
-    if (use_deepseek or use_finam or use_moex or use_gemini or use_groq or use_openrouter) and has_advisor_strategy:
+    if run_advisors:
       last_prices = {}
       for figi in self.instruments_cfg:
         pos = positions.get(figi)
         last_prices[figi] = pos.current_price if pos and getattr(pos, "current_price", None) else self.broker.get_last_price(figi)
       history_summary: Optional[Dict[str, str]] = None
-      history_days = getattr(self.cfg, "deepseek_history_days", 0) or 0
+      history_days = getattr(self.cfg, "llm_history_days", 0) or 0
       if history_days > 0:
         to_dt = datetime.now()
         from_dt = to_dt - timedelta(days=history_days)
@@ -384,7 +383,6 @@ class PortfolioManager:
         from .finam_client import FinamClient
         from .moex_client import MoexClient
         from .market_data_client import CompositeMarketClient
-        from .advisor_ensemble import get_best_recommendations
         fc = FinamClient(
           api_token=getattr(self.finam_cfg, "api_token", "") if self.finam_cfg else "",
           base_url=getattr(self.finam_cfg, "base_url", "https://api.finam.ru") if self.finam_cfg else "https://api.finam.ru",
@@ -399,14 +397,11 @@ class PortfolioManager:
           equity=equity,
           cash=cash,
           last_prices=last_prices,
-          use_deepseek=use_deepseek,
           use_finam=use_finam,
           use_moex=use_moex,
-          use_gemini=use_gemini,
-          use_groq=use_groq,
           use_openrouter=use_openrouter,
           openrouter_kwargs={
-            "model": getattr(self.cfg, "openrouter_model", "openrouter/free"),
+            "model": getattr(self.cfg, "openrouter_model", "google/gemini-2.5-flash-lite"),
             "models": list(getattr(or_cfg, "models", None) or []) if or_cfg else None,
             "api_key_override": getattr(or_cfg, "api_key", "") if or_cfg else "",
             "base_url": getattr(or_cfg, "base_url", "https://openrouter.ai/api/v1") if or_cfg else "https://openrouter.ai/api/v1",
@@ -415,14 +410,14 @@ class PortfolioManager:
             "history_summary": history_summary,
           },
           market_client=mc,
-          finam_history_days=getattr(self.cfg, "deepseek_history_days", 30) or 30,
+          finam_history_days=getattr(self.cfg, "llm_history_days", 30) or 30,
         )
         for figi, r in recs.items():
           if figi in targets:
             tw = r.get("target_weight")
             if tw is not None:
               targets[figi] = equity * max(0.0, min(1.0, float(tw)))
-        deepseek_recommendations = recs
+        advisor_recommendations = recs
         if advisor_used and advisor_used != "none":
           logger.debug("Advisor rebalance: source=%s instruments=%d", advisor_used, len(recs))
       except Exception as e:
@@ -553,18 +548,15 @@ class PortfolioManager:
         try:
           effective_strategy = get_effective_strategy(cfg, learned, regime)
           effective_params = get_effective_params(cfg, learned, regime)
-          use_deepseek = (
-            effective_strategy == "deepseek"
-            or (isinstance(effective_strategy, list) and effective_strategy and effective_strategy[0] == "deepseek")
-          )
-          if use_deepseek:
-            if figi in deepseek_recommendations:
-              rec = deepseek_recommendations[figi]
+          use_ai = is_ai_strategy(effective_strategy)
+          if use_ai:
+            if figi in advisor_recommendations:
+              rec = advisor_recommendations[figi]
               signal = Signal(figi=figi, side=rec.get("action", "hold"), strength=float(rec.get("strength", 0.7)))
-              logger.debug("Signal %s (deepseek): %s strength=%.2f", cfg.ticker, signal.side, signal.strength)
+              logger.debug("Signal %s (ai): %s strength=%.2f", cfg.ticker, signal.side, signal.strength)
             else:
               signal = Signal(figi=figi, side="hold", strength=0.0)
-            strategy_used = "deepseek"
+            strategy_used = AI_STRATEGY
           else:
             effective_cfg = InstrumentConfig(
               figi=cfg.figi, ticker=cfg.ticker, strategy=effective_strategy,

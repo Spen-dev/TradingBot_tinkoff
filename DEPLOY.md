@@ -49,7 +49,7 @@ nano .env
 # TELEGRAM_TOKEN=...
 # TELEGRAM_ADMIN_CHAT_ID=...
 # SANDBOX_TARGET_CASH=120000
-# DEEPSEEK_API_KEY=...   # опционально: для стратегии deepseek (анализ портфеля через DeepSeek API)
+# OPENROUTER_API_KEY=...   # опционально: LLM-советник через OpenRouter (стратегия ai)
 ```
 
 Собрать образ и запустить:
@@ -76,18 +76,48 @@ docker compose logs -f bot
 
 ## 4. Обновление после изменений в Git
 
-На сервере:
+### Вручную на сервере
 
 ```bash
-cd /opt/tinkoff_bot
+cd /opt/TradingBot_tinkoff
 git pull
 docker compose build
 docker compose up -d
 ```
 
+### Автоматически (GitHub Actions)
+
+При push в `main` workflow `.github/workflows/deploy.yml` подключается по SSH и пересобирает контейнер.
+
+**Secrets в репозитории GitHub** (Settings → Secrets and variables → Actions):
+
+| Secret | Пример |
+|--------|--------|
+| `VPS_HOST` | `YOUR_VPS_IP` |
+| `VPS_USER` | `root` |
+| `VPS_SSH_KEY` | приватный ключ SSH (полное содержимое) |
+
+На сервере репозиторий должен лежать в `/opt/TradingBot_tinkoff` (как в workflow).
+
 ---
 
-## 5. Важно
+## 5. Автоматизация (ops)
+
+В `config.yaml` секция `ops`:
+
+- **auto_start_sandbox** — после перезапуска Docker бот сам нажимает «Старт» (sandbox).
+- **block_trading_on_config_error** — при ошибках конфига торговля блокируется, но мониторинг работает.
+- **exit_on_config_error_real** — в режиме `real` процесс завершается (Docker перезапустит).
+- **openrouter_balance_check_hours** — алерт при низком балансе OpenRouter.
+- **macro_refresh_on_news_change / macro_refresh_on_index_drop_pct** — вне 7-дн. цикла обновление портfеля по новостям или падению индекса.
+- **learned_params_backup_interval_hours** — копии в `data/backups/`.
+- **watchdog_exit_after_failures** — при сбоях брокера выход для `restart: unless-stopped`.
+
+Health-check Docker: `GET http://localhost:8000/health` (503 при ошибках конфига или брокера).
+
+---
+
+## 6. Важно
 
 - На сервере должен быть **один** запущенный контейнер бота (иначе конфликт Telegram getUpdates).
 - Файлы `data/` и `learned_params/` монтируются с хоста — логи и обученные параметры сохраняются между перезапусками.
@@ -95,7 +125,7 @@ docker compose up -d
 
 ---
 
-## 6. Бот не отвечает в Telegram
+## 7. Бот не отвечает в Telegram
 
 1. **Проверить, что контейнер запущен и не падает:**
    ```bash

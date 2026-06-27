@@ -78,8 +78,18 @@ async def main() -> None:
     display_timezone=getattr(cfg.portfolio, "trading_timezone", "") or "",
   )
   ok, errs = validate_config(cfg)
+  config_valid = ok
+  ops_cfg = getattr(cfg, "ops", None)
+  trading_enabled = getattr(cfg.portfolio, "trading_enabled", True)
   if not ok:
     await send_alert(tg, "⚠️ Ошибки конфига: " + "; ".join(errs), "config_error", force=True)
+    if ops_cfg and ops_cfg.block_trading_on_config_error:
+      trading_enabled = False
+      logger.error("Торговля заблокирована из-за ошибок конфига")
+    mode_err = getattr(cfg, "mode", "sandbox") or "sandbox"
+    if mode_err == "real" and ops_cfg and ops_cfg.exit_on_config_error_real:
+      logger.error("Режим real: критические ошибки конфига — выход")
+      raise SystemExit(1)
 
   broker = TinkoffBroker(cfg.tinkoff)
   if getattr(cfg.portfolio, "use_candle_cache", False):
@@ -97,8 +107,6 @@ async def main() -> None:
     broker,
     risk,
     finam_cfg=getattr(cfg, "finam", None),
-    gemini_cfg=getattr(cfg, "gemini", None),
-    groq_cfg=getattr(cfg, "groq", None),
     openrouter_cfg=getattr(cfg, "openrouter", None),
   )
   broker_timeout = max(5.0, float(getattr(cfg.portfolio, "request_timeout_seconds", 30) or 30))
@@ -116,16 +124,12 @@ async def main() -> None:
           broker,
           static_instruments,
           force=force,
-          history_days=getattr(cfg.portfolio, "deepseek_history_days", 10) or 10,
-          deepseek_model=getattr(cfg.portfolio, "deepseek_model", "deepseek-chat"),
-          gemini_model=getattr(cfg.portfolio, "gemini_model", "gemini-2.0-flash"),
-          groq_model=getattr(cfg.portfolio, "groq_model", "llama-3.3-70b-versatile"),
-          openrouter_model=getattr(cfg.portfolio, "openrouter_model", "meta-llama/llama-3.3-70b-instruct:free"),
+          history_days=getattr(cfg.portfolio, "llm_history_days", 10) or 10,
+          openrouter_model=getattr(cfg.portfolio, "openrouter_model", "google/gemini-2.5-flash-lite"),
           base_dir=base_dir,
           finam_cfg=getattr(cfg, "finam", None),
-          gemini_cfg=getattr(cfg, "gemini", None),
-          groq_cfg=getattr(cfg, "groq", None),
           openrouter_cfg=getattr(cfg, "openrouter", None),
+          macro_news_cfg=getattr(cfg, "macro_news", None),
         ),
       )
     except Exception as e:
@@ -157,7 +161,6 @@ async def main() -> None:
 
   day_start_equity: float | None = None
   last_trade_time: datetime | None = None
-  trading_enabled = getattr(cfg.portfolio, "trading_enabled", True)
   started = False
   real_trade_confirmed = False
   awaiting_real_confirm = False
@@ -403,6 +406,10 @@ async def main() -> None:
 
     nonlocal day_start_equity, last_trade_time, awaiting_real_confirm, real_trade_confirmed
     logger.info("Ребаланс (%s): вызов", source)
+    if not config_valid:
+      msg = "⚠️ Ошибки конфига — торговля заблокирована. Ребаланс не выполнен."
+      await send_alert(tg, msg, "config_error", force=True)
+      return _out(msg, False, False)
     try:
       mode = getattr(cfg, "mode", "sandbox") or "sandbox"
       dry_run = getattr(cfg.portfolio, "dry_run", True)
@@ -673,9 +680,30 @@ async def main() -> None:
 
   try:
     from tinkoff_bot.health_server import run_health_server
-    health_server = await run_health_server(cfg.web.host, cfg.web.port, broker, cfg, lambda: started, lambda: robot_started_at)
+
+    def _health_ready() -> bool:
+      auto = bool(getattr(cfg.portfolio, "auto_rebalance_when_stopped", False))
+      return (started or auto) and config_valid
+
+    health_server = await run_health_server(
+      cfg.web.host,
+      cfg.web.port,
+      broker,
+      cfg,
+      _health_ready,
+      lambda: robot_started_at,
+      is_config_ok=lambda: config_valid,
+    )
   except Exception:
     health_server = None
+
+  if ops_cfg and ops_cfg.auto_start_sandbox and cfg.tinkoff.use_sandbox and not started:
+    try:
+      logger.info("Автостарт sandbox (ops.auto_start_sandbox)")
+      await on_start()
+    except Exception as e:
+      logger.exception("auto_start_sandbox: %s", e)
+      await send_alert(tg, f"❌ Автостарт sandbox не удался: {e}", "auto_start_error", force=True)
 
   async def daily_digest_scheduler():
     """Отдельный цикл: дайджест не зависит от длины тика планировщика (RL, недельный отчёт и т.д.)."""
@@ -791,6 +819,12 @@ async def main() -> None:
     last_log_cleanup_date: date | None = None
     last_dynamic_portfolio_date: date | None = None
     last_weekly_report_date: date | None = None
+    last_openrouter_balance_check: datetime | None = None
+    last_params_backup: datetime | None = None
+    last_macro_news_check: datetime | None = None
+    last_macro_index_trigger_date: date | None = None
+    last_sandbox_topup_date: date | None = None
+    macro_news_cfg = getattr(cfg, "macro_news", None)
     alert_live_ping_hours = getattr(cfg.portfolio, "alert_live_ping_hours", 0.0) or 0.0
     weekly_weekday = getattr(cfg.portfolio, "weekly_report_weekday", 6) or 6
     weekly_time = getattr(cfg.portfolio, "weekly_report_time", "18:00") or "18:00"
@@ -898,6 +932,7 @@ async def main() -> None:
         today = wnow.date()
         # Минуты от полуночи в зоне окна (для расписания без «ровно эта минута» — иначе sleep(60) часто пропускает слот)
         now_slot = wnow.hour * 60 + wnow.minute
+        scheduler_ok = bool(started) or bool(getattr(cfg.portfolio, "auto_rebalance_when_stopped", False))
 
         if last_started_state is None or bool(started) != last_started_state:
           last_started_state = bool(started)
@@ -910,6 +945,93 @@ async def main() -> None:
           elif (now - last_live_ping).total_seconds() >= alert_live_ping_hours * 3600:
             last_live_ping = now
             await send_alert(tg, "🤖 Робот работает (планировщик активен).", "live_ping", force=True)
+
+        if scheduler_ok and ops_cfg and ops_cfg.openrouter_balance_check_hours > 0:
+          if last_openrouter_balance_check is None or (
+            now - last_openrouter_balance_check
+          ).total_seconds() >= ops_cfg.openrouter_balance_check_hours * 3600:
+            last_openrouter_balance_check = now
+            try:
+              from tinkoff_bot.ops_automation import fetch_openrouter_remaining_usd
+
+              loop = asyncio.get_running_loop()
+              remaining = await loop.run_in_executor(None, fetch_openrouter_remaining_usd)
+              if remaining is not None and remaining < ops_cfg.openrouter_min_balance_usd:
+                await send_alert(
+                  tg,
+                  f"💳 OpenRouter: остаток ${remaining:.2f} (порог ${ops_cfg.openrouter_min_balance_usd:.2f})",
+                  "openrouter_balance",
+                  force=True,
+                )
+            except Exception as e:
+              logger.debug("openrouter balance check: %s", e)
+
+        if scheduler_ok and ops_cfg and ops_cfg.learned_params_backup_interval_hours > 0:
+          if last_params_backup is None or (
+            now - last_params_backup
+          ).total_seconds() >= ops_cfg.learned_params_backup_interval_hours * 3600:
+            last_params_backup = now
+            try:
+              from tinkoff_bot.ops_automation import backup_learned_params
+
+              path = backup_learned_params(base_dir)
+              if path:
+                logger.info("learned_params backup: %s", path)
+            except Exception as e:
+              logger.warning("learned_params backup: %s", e)
+
+        if (
+          scheduler_ok
+          and ops_cfg
+          and ops_cfg.sandbox_auto_topup
+          and cfg.tinkoff.use_sandbox
+          and last_sandbox_topup_date != today
+        ):
+          last_sandbox_topup_date = today
+          try:
+            from tinkoff_bot.ops_automation import ensure_sandbox_funded
+
+            loop = asyncio.get_running_loop()
+            topup_msg = await loop.run_in_executor(
+              None,
+              lambda: ensure_sandbox_funded(broker, cfg.portfolio.base_currency),
+            )
+            if topup_msg:
+              await send_alert(tg, f"🏦 Sandbox: {topup_msg}", "sandbox_topup", force=True)
+          except Exception as e:
+            logger.debug("sandbox topup: %s", e)
+
+        if (
+          scheduler_ok
+          and dp_cfg
+          and dp_cfg.enabled
+          and dp_cfg.use_macro
+          and macro_news_cfg
+          and ops_cfg
+          and ops_cfg.macro_refresh_on_news_change
+          and ops_cfg.macro_news_check_hours > 0
+        ):
+          if last_macro_news_check is None or (
+            now - last_macro_news_check
+          ).total_seconds() >= ops_cfg.macro_news_check_hours * 3600:
+            last_macro_news_check = now
+            try:
+              from tinkoff_bot.ops_automation import should_refresh_portfolio_for_news
+
+              loop = asyncio.get_running_loop()
+              do_refresh, reason = await loop.run_in_executor(
+                None,
+                lambda: should_refresh_portfolio_for_news(
+                  macro_news_cfg,
+                  base_dir=base_dir,
+                  refresh_on_news_change=ops_cfg.macro_refresh_on_news_change,
+                ),
+              )
+              if do_refresh:
+                logger.info("macro news trigger: %s", reason)
+                await apply_dynamic_portfolio(force=True, notify=True)
+            except Exception as e:
+              logger.warning("macro news check: %s", e)
 
         in_window = _in_rebalance_window()
         if (last_window_state is None) or (in_window != last_window_state) or (last_window_state_date != today):
@@ -939,7 +1061,6 @@ async def main() -> None:
             )
 
         day_start = day_start_equity or 0.0
-        scheduler_ok = bool(started) or bool(getattr(cfg.portfolio, "auto_rebalance_when_stopped", False))
         if scheduler_ok:
           # До RL / тяжёлого недельного отчёта: иначе цикл мог дойти до ребаланса уже после закрытия окна.
           if market_index_figi and last_market_check_date != today:
@@ -965,6 +1086,21 @@ async def main() -> None:
                     market_vol_level = "high"
                   else:
                     market_vol_level = "normal"
+                  if (
+                    dp_cfg
+                    and dp_cfg.enabled
+                    and dp_cfg.use_macro
+                    and ops_cfg
+                    and ret < 0
+                    and abs(ret) >= ops_cfg.macro_refresh_on_index_drop_pct
+                    and last_macro_index_trigger_date != today
+                  ):
+                    last_macro_index_trigger_date = today
+                    logger.info("macro index trigger: ret=%.2f%%", ret * 100)
+                    try:
+                      await apply_dynamic_portfolio(force=True, notify=True)
+                    except Exception as e:
+                      logger.warning("macro index refresh: %s", e)
             except Exception:
               market_vol_level = "normal"
           if day_start_equity is not None and last_day_reset_date is not None and today != last_day_reset_date:
@@ -1171,7 +1307,7 @@ async def main() -> None:
                 f"{ticker}{suf}: доходность {pnl_bt*100:.1f}%, макс. просадка {max_dd*100:.1f}%, коэфф. Шарпа {sharpe:.2f}, сделок {n_trades_bt}"
               )
             if any(r[5] for r in rows[:4]):
-              bt_lines.append("* бэктест по суррогатной стратегии (deepseek в learned без API в отчёте)")
+              bt_lines.append("* бэктест по суррогатной стратегии (ai в learned без API в отчёте)")
             bt_text = "\n".join(bt_lines) if bt_lines else "нет достаточно данных для бэктеста"
             rl_lines = []
             for inst in rl_instruments:
@@ -1433,6 +1569,7 @@ async def main() -> None:
   async def watchdog():
     failures = 0
     interval = max(60, getattr(cfg.portfolio, "watchdog_interval_seconds", 90))
+    exit_after = int(getattr(ops_cfg, "watchdog_exit_after_failures", 3) or 3) if ops_cfg else 3
     while True:
       await asyncio.sleep(interval)
       if not started and not getattr(cfg.portfolio, "auto_rebalance_when_stopped", False):
@@ -1443,11 +1580,14 @@ async def main() -> None:
       except Exception as e:
         logger.warning("watchdog get_cash_balance: %s", e)
         failures += 1
-        if failures >= 3:
+        if failures >= max(1, exit_after):
           try:
             await send_alert(tg, "⚠️ Робот: брокер не отвечает после нескольких попыток.", "watchdog", force=True)
           except Exception as alert_err:
             logger.warning("watchdog send_alert: %s", alert_err)
+          if exit_after > 0:
+            logger.error("watchdog: %d сбоев подряд — выход для перезапуска контейнера", failures)
+            os._exit(1)
           failures = 0
 
   watchdog_task = asyncio.create_task(watchdog())

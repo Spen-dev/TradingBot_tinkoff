@@ -17,7 +17,22 @@ from .openrouter_client import (
 
 logger = logging.getLogger(__name__)
 
-_llm_cache: Optional[tuple] = None
+_llm_cache: Optional[tuple] = None  # (cache_key, data, ts)
+
+
+def _recommendations_cache_key(
+  instruments: List[Any],
+  equity: float,
+  cash: float,
+) -> tuple:
+  """Ключ кэша: состав портфеля + грубое изменение equity/cash."""
+  members = tuple(
+    sorted(
+      (getattr(i, "figi", ""), getattr(i, "ticker", ""), round(float(getattr(i, "target_weight", 0) or 0), 4))
+      for i in instruments
+    )
+  )
+  return (members, int(equity // 5000), int(cash // 5000))
 
 
 def _make_chat_fn(
@@ -55,7 +70,7 @@ def select_universe_via_openrouter(
   max_instruments: int,
   max_weight: float,
   *,
-  model: str = "openrouter/free",
+  model: str = "google/gemini-2.5-flash-lite",
   models: Optional[List[str]] = None,
   api_key_override: str = "",
   base_url: str = "https://openrouter.ai/api/v1",
@@ -95,7 +110,7 @@ def get_recommendations(
   cash: float,
   last_prices: Dict[str, float],
   *,
-  model: str = "openrouter/free",
+  model: str = "google/gemini-2.5-flash-lite",
   models: Optional[List[str]] = None,
   api_key_override: str = "",
   base_url: str = "https://openrouter.ai/api/v1",
@@ -105,9 +120,10 @@ def get_recommendations(
   history_summary: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
   global _llm_cache
+  cache_key = _recommendations_cache_key(instruments, equity, cash)
   if cache_hours > 0 and _llm_cache is not None:
-    cached, ts = _llm_cache
-    if (time.time() - ts) < cache_hours * 3600:
+    cached_key, cached, ts = _llm_cache
+    if cached_key == cache_key and (time.time() - ts) < cache_hours * 3600:
       return dict(cached)
 
   key = api_key(api_key_override)
@@ -128,7 +144,7 @@ def get_recommendations(
     provider_label="OpenRouter",
   )
   if cache_hours > 0 and out:
-    _llm_cache = (out, time.time())
+    _llm_cache = (cache_key, out, time.time())
   return out
 
 

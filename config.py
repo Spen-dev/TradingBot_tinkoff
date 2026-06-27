@@ -59,7 +59,7 @@ class TinkoffConfig:
 
 @dataclass
 class DynamicPortfolioConfig:
-  """Динамический состав портфеля по советам DeepSeek / Finam."""
+  """Динамический состав портфеля: Finam / MOEX / OpenRouter."""
   enabled: bool = False
   candidates: List[str] = field(default_factory=list)
   max_instruments: int = 6
@@ -69,13 +69,38 @@ class DynamicPortfolioConfig:
   default_strategy: str = "adaptive"
   fallback_to_static: bool = True
   state_file: str = "data/dynamic_portfolio.json"
-  use_deepseek: bool = True
   use_finam: bool = True
   use_moex: bool = True
-  use_gemini: bool = True
-  use_groq: bool = True
   use_openrouter: bool = True
+  use_macro: bool = True
   pick_best_advisor: bool = True
+
+
+@dataclass
+class MacroNewsConfig:
+  """RSS-новости для macro-советника (события → LLM → портфель)."""
+  rss_urls: List[str] = field(default_factory=list)
+  max_headlines_per_feed: int = 10
+  max_headlines_total: int = 25
+  cache_hours: float = 6.0
+  cache_file: str = "data/macro_news_cache.json"
+  request_timeout_seconds: float = 20.0
+
+
+@dataclass
+class OpsConfig:
+  """Автоматизация эксплуатации без ручного вмешательства."""
+  auto_start_sandbox: bool = True
+  exit_on_config_error_real: bool = True
+  block_trading_on_config_error: bool = True
+  openrouter_min_balance_usd: float = 2.0
+  openrouter_balance_check_hours: float = 24.0
+  macro_refresh_on_index_drop_pct: float = 0.03
+  macro_refresh_on_news_change: bool = True
+  macro_news_check_hours: float = 6.0
+  learned_params_backup_interval_hours: float = 24.0
+  sandbox_auto_topup: bool = True
+  watchdog_exit_after_failures: int = 3
 
 
 @dataclass
@@ -92,26 +117,13 @@ class MoexConfig:
 
 
 @dataclass
-class GeminiConfig:
-  api_key: str = ""
-  model: str = "gemini-2.0-flash"
-
-
-@dataclass
-class GroqConfig:
-  api_key: str = ""
-  model: str = "llama-3.3-70b-versatile"
-
-
-@dataclass
 class OpenRouterConfig:
   api_key: str = ""
   model: str = "google/gemini-2.5-flash-lite"
   models: List[str] = field(default_factory=lambda: [
-    "google/gemini-2.5-flash-lite",
     "deepseek/deepseek-chat",
     "meta-llama/llama-3.3-70b-instruct",
-    "google/gemini-2.5-flash",
+    "google/gemini-2.5-flash-lite",
   ])
   base_url: str = "https://openrouter.ai/api/v1"
   site_url: str = ""
@@ -196,25 +208,18 @@ class PortfolioConfig:
   alert_drawdown_pct: float = 0.0   # алерт при просадке >= N% (0 = выкл)
   alert_daily_loss_pct: float = 0.0  # алерт при дневном убытке >= N% от старта дня (0 = выкл)
   alert_live_ping_hours: float = 0.0  # раз в N часов отправлять «Робот работает» (0 = выкл)
-  use_deepseek_advisor: bool = False  # DeepSeek для рекомендаций
   use_finam_advisor: bool = False  # Finam Trade API: количественные сигналы
   use_moex_advisor: bool = True  # MOEX ISS: бесплатные количественные сигналы
-  use_gemini_advisor: bool = True  # Google Gemini LLM
-  use_groq_advisor: bool = True  # Groq LLM (Llama)
-  use_openrouter_advisor: bool = True  # OpenRouter LLM (:free модели)
+  use_openrouter_advisor: bool = True  # OpenRouter LLM
   pick_best_advisor: bool = True  # выбрать лучший советник
-  deepseek_model: str = "deepseek-chat"
-  gemini_model: str = "gemini-2.0-flash"
-  groq_model: str = "llama-3.3-70b-versatile"
   openrouter_model: str = "google/gemini-2.5-flash-lite"
   llm_cache_hours: float = 4.0  # кэш LLM-советников (часы)
-  auto_strategy_selection_on_start: bool = False  # при старте робота один раз выбрать лучшую стратегию по бэктесту для каждого инструмента
-  strategy_selection_days: int = 90  # глубина истории (дней) для выбора стратегии
-  strategy_selection_interval_days: int = 0  # пересчёт выбора стратегии раз в N дней (0 = только при старте и вручную)
-  strategy_change_min_delta: float = 0.05  # не менять стратегию, если прирост оценки меньше этого порога
-  strategy_diversity_max_share: float = 0.0  # макс. доля портфеля у одной стратегии, 0 = не ограничивать (0.5 = 50%)
-  deepseek_cache_hours: float = 4.0  # кэш рекомендаций DeepSeek (часы), 0 = не кэшировать
-  deepseek_history_days: int = 10  # дней истории (доходность, волатильность) в контексте для DeepSeek
+  llm_history_days: int = 10  # дней истории в контексте LLM (доходность, волатильность)
+  auto_strategy_selection_on_start: bool = False
+  strategy_selection_days: int = 90
+  strategy_selection_interval_days: int = 0
+  strategy_change_min_delta: float = 0.05
+  strategy_diversity_max_share: float = 0.0
   rebalance_decisions_log: bool = True  # писать в лог решения ребаланса (стратегия, сигнал, заявки)
   aggressive_rebalance: bool = False  # максимально агрессивный ребаланс по весам (ослабить фильтры по сигналам/отклонению)
   log_retention_days: int = 14  # хранить ротированные bot.log.*; автоочистка раз в сутки
@@ -259,12 +264,14 @@ class AppConfig:
   dynamic_portfolio: DynamicPortfolioConfig | None = None
   finam: FinamConfig | None = None
   moex: MoexConfig | None = None
-  gemini: GeminiConfig | None = None
-  groq: GroqConfig | None = None
   openrouter: OpenRouterConfig | None = None
+  macro_news: MacroNewsConfig | None = None
+  ops: OpsConfig | None = None
 
 
 def load_config(path: str = "config.yaml") -> AppConfig:
+  from .strategy_names import normalize_strategy_name
+
   with open(path, "r", encoding="utf-8") as f:
     raw = yaml.safe_load(f)
 
@@ -360,25 +367,18 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     alert_drawdown_pct=p_raw.get("alert_drawdown_pct", 0.0),
     alert_daily_loss_pct=p_raw.get("alert_daily_loss_pct", 0.0),
     alert_live_ping_hours=p_raw.get("alert_live_ping_hours", 0.0),
-    use_deepseek_advisor=p_raw.get("use_deepseek_advisor", False),
     use_finam_advisor=p_raw.get("use_finam_advisor", False),
     use_moex_advisor=p_raw.get("use_moex_advisor", True),
-    use_gemini_advisor=p_raw.get("use_gemini_advisor", True),
-    use_groq_advisor=p_raw.get("use_groq_advisor", True),
     use_openrouter_advisor=p_raw.get("use_openrouter_advisor", True),
     pick_best_advisor=p_raw.get("pick_best_advisor", True),
-    deepseek_model=p_raw.get("deepseek_model", "deepseek-chat"),
-    gemini_model=p_raw.get("gemini_model", "gemini-2.0-flash"),
-    groq_model=p_raw.get("groq_model", "llama-3.3-70b-versatile"),
-    openrouter_model=p_raw.get("openrouter_model", "meta-llama/llama-3.3-70b-instruct:free"),
-    llm_cache_hours=float(p_raw.get("llm_cache_hours", 4.0) or 4.0),
+    openrouter_model=p_raw.get("openrouter_model", "google/gemini-2.5-flash-lite"),
+    llm_cache_hours=float(p_raw.get("llm_cache_hours", p_raw.get("deepseek_cache_hours", 4.0)) or 4.0),
+    llm_history_days=int(p_raw.get("llm_history_days", p_raw.get("deepseek_history_days", 10)) or 10),
     auto_strategy_selection_on_start=p_raw.get("auto_strategy_selection_on_start", False),
     strategy_selection_days=p_raw.get("strategy_selection_days", 90),
     strategy_selection_interval_days=p_raw.get("strategy_selection_interval_days", 0),
     strategy_change_min_delta=p_raw.get("strategy_change_min_delta", 0.05),
     strategy_diversity_max_share=p_raw.get("strategy_diversity_max_share", 0.0),
-    deepseek_cache_hours=p_raw.get("deepseek_cache_hours", 4.0),
-    deepseek_history_days=p_raw.get("deepseek_history_days", 10),
     rebalance_decisions_log=p_raw.get("rebalance_decisions_log", True),
     aggressive_rebalance=p_raw.get("aggressive_rebalance", False),
     log_retention_days=int(p_raw.get("log_retention_days", 14) or 14),
@@ -400,6 +400,8 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     d = dict(i)
     d.setdefault("lot", 1)
     d.setdefault("strategy_params", {})
+    if "strategy" in d:
+      d["strategy"] = normalize_strategy_name(d["strategy"])
     instruments.append(InstrumentConfig(**d))
 
   dp_raw = raw.get("dynamic_portfolio") or {}
@@ -410,16 +412,27 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     min_instruments=int(dp_raw.get("min_instruments", 4) or 4),
     max_weight_per_instrument=float(dp_raw.get("max_weight_per_instrument", 0.30) or 0.30),
     refresh_interval_days=int(dp_raw.get("refresh_interval_days", 7) or 7),
-    default_strategy=str(dp_raw.get("default_strategy", "adaptive") or "adaptive"),
+    default_strategy=normalize_strategy_name(str(dp_raw.get("default_strategy", "adaptive") or "adaptive")),
     fallback_to_static=bool(dp_raw.get("fallback_to_static", True)),
     state_file=str(dp_raw.get("state_file", "data/dynamic_portfolio.json") or "data/dynamic_portfolio.json"),
-    use_deepseek=bool(dp_raw.get("use_deepseek", True)),
     use_finam=bool(dp_raw.get("use_finam", True)),
     use_moex=bool(dp_raw.get("use_moex", True)),
-    use_gemini=bool(dp_raw.get("use_gemini", True)),
-    use_groq=bool(dp_raw.get("use_groq", True)),
     use_openrouter=bool(dp_raw.get("use_openrouter", True)),
+    use_macro=bool(dp_raw.get("use_macro", True)),
     pick_best_advisor=bool(dp_raw.get("pick_best_advisor", True)),
+  )
+
+  from .news_client import DEFAULT_RSS_URLS
+
+  mn_raw = raw.get("macro_news") or {}
+  mn_urls_raw = mn_raw.get("rss_urls")
+  macro_news = MacroNewsConfig(
+    rss_urls=[str(u) for u in mn_urls_raw if u] if mn_urls_raw else list(DEFAULT_RSS_URLS),
+    max_headlines_per_feed=int(mn_raw.get("max_headlines_per_feed", 10) or 10),
+    max_headlines_total=int(mn_raw.get("max_headlines_total", 25) or 25),
+    cache_hours=float(mn_raw.get("cache_hours", 6.0) or 6.0),
+    cache_file=str(mn_raw.get("cache_file", "data/macro_news_cache.json") or "data/macro_news_cache.json"),
+    request_timeout_seconds=float(mn_raw.get("request_timeout_seconds", 20) or 20),
   )
 
   fm_raw = raw.get("finam") or {}
@@ -435,24 +448,11 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     board=str(mx_raw.get("board", "TQBR") or "TQBR"),
   )
 
-  gm_raw = raw.get("gemini") or {}
-  gemini = GeminiConfig(
-    api_key=os.getenv("GEMINI_API_KEY", gm_raw.get("api_key", "")),
-    model=str(gm_raw.get("model", "gemini-2.0-flash") or "gemini-2.0-flash"),
-  )
-
-  gq_raw = raw.get("groq") or {}
-  groq = GroqConfig(
-    api_key=os.getenv("GROQ_API_KEY", gq_raw.get("api_key", "")),
-    model=str(gq_raw.get("model", "llama-3.3-70b-versatile") or "llama-3.3-70b-versatile"),
-  )
-
   or_raw = raw.get("openrouter") or {}
   or_models_raw = or_raw.get("models") or [
-    "google/gemini-2.5-flash-lite",
     "deepseek/deepseek-chat",
     "meta-llama/llama-3.3-70b-instruct",
-    "google/gemini-2.5-flash",
+    "google/gemini-2.5-flash-lite",
   ]
   openrouter = OpenRouterConfig(
     api_key=os.getenv("OPENROUTER_API_KEY", or_raw.get("api_key", "")),
@@ -460,6 +460,21 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     models=[str(m) for m in or_models_raw if m],
     base_url=str(or_raw.get("base_url", "https://openrouter.ai/api/v1") or "https://openrouter.ai/api/v1"),
     site_url=str(or_raw.get("site_url", "") or ""),
+  )
+
+  op_raw = raw.get("ops") or {}
+  ops = OpsConfig(
+    auto_start_sandbox=bool(op_raw.get("auto_start_sandbox", True)),
+    exit_on_config_error_real=bool(op_raw.get("exit_on_config_error_real", True)),
+    block_trading_on_config_error=bool(op_raw.get("block_trading_on_config_error", True)),
+    openrouter_min_balance_usd=float(op_raw.get("openrouter_min_balance_usd", 2.0) or 2.0),
+    openrouter_balance_check_hours=float(op_raw.get("openrouter_balance_check_hours", 24.0) or 24.0),
+    macro_refresh_on_index_drop_pct=float(op_raw.get("macro_refresh_on_index_drop_pct", 0.03) or 0.03),
+    macro_refresh_on_news_change=bool(op_raw.get("macro_refresh_on_news_change", True)),
+    macro_news_check_hours=float(op_raw.get("macro_news_check_hours", 6.0) or 6.0),
+    learned_params_backup_interval_hours=float(op_raw.get("learned_params_backup_interval_hours", 24.0) or 24.0),
+    sandbox_auto_topup=bool(op_raw.get("sandbox_auto_topup", True)),
+    watchdog_exit_after_failures=int(op_raw.get("watchdog_exit_after_failures", 3) or 3),
   )
 
   return AppConfig(
@@ -473,15 +488,15 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     dynamic_portfolio=dynamic_portfolio,
     finam=finam,
     moex=moex,
-    gemini=gemini,
-    groq=groq,
     openrouter=openrouter,
+    macro_news=macro_news,
+    ops=ops,
   )
 
 
 VALID_STRATEGIES = (
   "mean_reversion", "momentum", "rsi", "ma_crossover", "breakout",
-  "volume_weighted", "volatility_regime", "index", "time_filter", "adaptive", "rl", "deepseek",
+  "volume_weighted", "volatility_regime", "index", "time_filter", "adaptive", "rl", "ai",
 )
 
 
@@ -513,7 +528,9 @@ def validate_config(cfg: "AppConfig") -> tuple[bool, list[str]]:
     s = getattr(i, "strategy", None)
     strategies_to_check = [s] if isinstance(s, str) else (s if isinstance(s, list) else [])
     for strat in strategies_to_check:
-      if strat is not None and strat not in VALID_STRATEGIES:
+      from .strategy_names import normalize_strategy_name
+      norm = normalize_strategy_name(strat)
+      if strat is not None and norm not in VALID_STRATEGIES:
         errors.append(f"Неизвестная стратегия для {getattr(i, 'ticker', '')}: {strat}")
     if strategies_to_check and "rl" in strategies_to_check:
       params = getattr(i, "strategy_params", None) or {}
