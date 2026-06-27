@@ -12,7 +12,18 @@ from .strategy_names import is_ai_strategy
 
 logger = logging.getLogger(__name__)
 
+# Имена советников на базе LLM (приоритет при pick_best)
+AI_ADVISOR_SOURCES = frozenset({"llm", "macro", "ai"})
+# Небольшой бонус к score: AI побеждает при близких результатах, quant — при явном отрыве
+AI_PRIORITY_SCORE_BONUS = 0.05
+
 _REGIME_STRATEGY_KEYS = ("strategy_trend", "strategy_range", "strategy_weak_trend")
+
+
+def _advisor_score_with_ai_priority(name: str, score: float, ai_priority: bool) -> float:
+  if ai_priority and name in AI_ADVISOR_SOURCES:
+    return score + AI_PRIORITY_SCORE_BONUS
+  return score
 
 
 def _config_uses_llm_strategy(instrument: Any) -> bool:
@@ -49,13 +60,20 @@ def resolve_rebalance_advisor_flags(
   use_openrouter: bool,
   instruments: List[Any],
   learned: Optional[Dict[str, Dict[str, Any]]] = None,
+  ai_mode: bool = False,
+  llm_in_pick_best: bool = False,
 ) -> Tuple[bool, bool, bool, bool]:
   """
   Флаги для ребаланса: (run_ensemble, use_finam, use_moex, use_openrouter).
   LLM на ребалансе — только если есть инструменты со стратегией ai; Finam/MOEX — всегда при включении.
+  ai_mode: LLM primary на ребалансе; MOEX/Finam — fallback и pick_best портфеля.
   """
+  if ai_mode:
+    llm_enabled = bool(use_openrouter)
+    run = bool(use_finam) or bool(use_moex) or llm_enabled
+    return run, bool(use_finam), bool(use_moex), llm_enabled
   llm_strategy = instruments_use_llm_strategy(instruments, learned)
-  llm_enabled = use_openrouter and llm_strategy
+  llm_enabled = bool(use_openrouter) and (llm_strategy or llm_in_pick_best)
   run_ensemble = use_finam or use_moex or llm_enabled
   return run_ensemble, bool(use_finam), bool(use_moex), bool(llm_enabled)
 
@@ -118,6 +136,7 @@ def pick_best_portfolio(
   proposals: List[Tuple[str, List[Dict[str, Any]], str]],
   market_client: CompositeMarketClient,
   history_days: int = 90,
+  ai_priority: bool = False,
 ) -> Tuple[str, List[Dict[str, Any]], str, float]:
   """
   proposals: [(source_name, selections, summary), ...]
@@ -135,9 +154,10 @@ def pick_best_portfolio(
       score = score_portfolio_proposal(market_client, sel, history_days)
     else:
       score = sum(float(s.get("target_weight", 0)) for s in sel)
-    logger.info("Advisor %s: score=%.4f n=%d", name, score, len(sel))
-    if score > best_score:
-      best_score = score
+    adj = _advisor_score_with_ai_priority(name, score, ai_priority)
+    logger.info("Advisor %s: score=%.4f adj=%.4f n=%d", name, score, adj, len(sel))
+    if adj > best_score:
+      best_score = adj
       best_name = name
       best_sel = sel
       best_summary = summary
@@ -150,6 +170,39 @@ def pick_best_portfolio(
   if best_summary:
     msg += f". {best_summary}"
   return best_name, best_sel, msg, best_score
+
+
+def _pick_best_recommendation_proposals(
+  proposals: List[Tuple[str, Dict[str, Dict[str, Any]]]],
+  instruments: List[Any],
+  client: CompositeMarketClient,
+  finam_history_days: int,
+  ai_priority: bool = False,
+) -> Tuple[Dict[str, Dict[str, Any]], str]:
+  best_name = ""
+  best_recs: Dict[str, Dict[str, Any]] = {}
+  best_score = -1e18
+  for name, recs in proposals:
+    score = 0.0
+    for _figi, r in recs.items():
+      action = r.get("action", "hold")
+      strength = float(r.get("strength", 0.5))
+      sign = 1.0 if action == "buy" else (-1.0 if action == "sell" else 0.0)
+      score += sign * strength
+    if client.configured:
+      for ins in instruments:
+        if getattr(ins, "figi", "") in recs:
+          try:
+            bars = client.get_daily_bars(getattr(ins, "ticker", ""), days=finam_history_days)
+            score += score_bars(bars).get("score", 0) * 0.01
+          except Exception:
+            pass
+    adj = _advisor_score_with_ai_priority(name, score, ai_priority)
+    if adj > best_score:
+      best_score = adj
+      best_name = name
+      best_recs = recs
+  return best_recs, best_name
 
 
 def get_best_recommendations(
@@ -165,8 +218,10 @@ def get_best_recommendations(
   openrouter_kwargs: Optional[Dict[str, Any]] = None,
   market_client: Optional[CompositeMarketClient] = None,
   finam_history_days: int = 30,
+  ai_mode: bool = False,
+  ai_priority: bool = False,
 ) -> Tuple[Dict[str, Dict[str, Any]], str]:
-  """Сравнивает рекомендации советников, возвращает лучший набор."""
+  """Сравнивает рекомендации советников (LLM, Finam, MOEX), возвращает лучший набор."""
   openrouter_kwargs = openrouter_kwargs or {}
   proposals: List[Tuple[str, Dict[str, Dict[str, Any]]]] = []
 
@@ -208,30 +263,30 @@ def get_best_recommendations(
 
   if not proposals:
     return {}, "none"
+
+  if ai_mode:
+    for name, recs in proposals:
+      if name == "llm" and recs:
+        logger.info("ai_mode: рекомендации LLM (%d инструментов)", len(recs))
+        return recs, "llm"
+    quant = [(n, r) for n, r in proposals if n != "llm" and r]
+    if not quant:
+      return {}, "none"
+    if len(quant) == 1:
+      logger.info("ai_mode: LLM недоступен — fallback %s", quant[0][0])
+      return quant[0][1], quant[0][0]
+    logger.info("ai_mode: LLM недоступен — pick_best среди quant")
+    best_recs, best_name = _pick_best_recommendation_proposals(
+      quant, instruments, client, finam_history_days, ai_priority=False
+    )
+    return best_recs, best_name
+
   if len(proposals) == 1:
     return proposals[0][1], proposals[0][0]
 
-  best_name = ""
-  best_recs: Dict[str, Dict[str, Any]] = {}
-  best_score = -1e18
-  for name, recs in proposals:
-    score = 0.0
-    for _figi, r in recs.items():
-      action = r.get("action", "hold")
-      strength = float(r.get("strength", 0.5))
-      sign = 1.0 if action == "buy" else (-1.0 if action == "sell" else 0.0)
-      score += sign * strength
-    if client.configured:
-      for ins in instruments:
-        if getattr(ins, "figi", "") in recs:
-          try:
-            bars = client.get_daily_bars(getattr(ins, "ticker", ""), days=finam_history_days)
-            score += score_bars(bars).get("score", 0) * 0.01
-          except Exception:
-            pass
-    if score > best_score:
-      best_score = score
-      best_name = name
-      best_recs = recs
-
+  best_recs, best_name = _pick_best_recommendation_proposals(
+    proposals, instruments, client, finam_history_days, ai_priority=ai_priority
+  )
+  if ai_priority and best_name:
+    logger.info("pick_best ребаланс: выбран %s (ai_priority=%s)", best_name, ai_priority)
   return best_recs, best_name

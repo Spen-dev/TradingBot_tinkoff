@@ -289,7 +289,7 @@ def strategy_selection_llm_kwargs(cfg: Any) -> Dict[str, Any]:
   portfolio = cfg.portfolio
   or_cfg = getattr(cfg, "openrouter", None)
   return {
-    "allow_llm": bool(getattr(portfolio, "use_openrouter_advisor", True)),
+    "allow_llm": bool(getattr(portfolio, "allow_ai_in_strategy_selection", True)),
     "llm_model": getattr(portfolio, "openrouter_model", "google/gemini-2.5-flash-lite"),
     "llm_models": list(getattr(or_cfg, "models", None) or []) if or_cfg else None,
     "llm_api_key": getattr(or_cfg, "api_key", "") if or_cfg else "",

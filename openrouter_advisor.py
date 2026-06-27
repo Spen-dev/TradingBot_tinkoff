@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from .llm_advisor_base import get_recommendations_via_llm, select_universe_via_llm
+from .llm_advisor_base import get_recommendations_via_llm
 from .openrouter_client import (
   DEFAULT_FALLBACK_MODELS,
   api_key,
@@ -63,46 +63,6 @@ def _make_chat_fn(
   return chat_fn
 
 
-def select_universe_via_openrouter(
-  candidates: List[str],
-  candidate_summary: Dict[str, str],
-  min_instruments: int,
-  max_instruments: int,
-  max_weight: float,
-  *,
-  model: str = "google/gemini-2.5-flash-lite",
-  models: Optional[List[str]] = None,
-  api_key_override: Optional[str] = None,
-  base_url: str = "https://openrouter.ai/api/v1",
-  site_url: str = "",
-  app_name: str = "Tinkoff Trading Bot",
-  equity: float = 0.0,
-  market_context: str = "",
-) -> Tuple[List[Dict[str, Any]], str]:
-  key = api_key(api_key_override)
-  if not key:
-    return [], "OPENROUTER_API_KEY не задан"
-
-  primary = map_legacy_model(model)
-  chat_fn = _make_chat_fn(primary, models, key, base_url, site_url, app_name, max_tokens=1536)
-  sel, summary = select_universe_via_llm(
-    chat_fn,
-    candidates=candidates,
-    candidate_summary=candidate_summary,
-    min_instruments=min_instruments,
-    max_instruments=max_instruments,
-    max_weight=max_weight,
-    equity=equity,
-    market_context=market_context,
-    provider_label="OpenRouter",
-  )
-  if sel and summary:
-    return sel, summary
-  if sel:
-    return sel, f"OpenRouter ({primary}): {len(sel)} инструментов"
-  return sel, summary
-
-
 def get_recommendations(
   instruments: List[Any],
   positions: Dict[str, Any],
@@ -148,12 +108,9 @@ def get_recommendations(
   return out
 
 
-# Алиасы для обратной совместимости
-select_universe_via_llm_gateway = select_universe_via_openrouter
 get_llm_recommendations = get_recommendations
 
 __all__ = [
-  "select_universe_via_openrouter",
   "get_recommendations",
   "get_llm_recommendations",
   "DEFAULT_FALLBACK_MODELS",

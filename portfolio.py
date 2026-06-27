@@ -276,21 +276,26 @@ class PortfolioManager:
         prices_for_target[figi] = pos.current_price if pos else self.broker.get_last_price(figi)
     targets = self._target_values(equity, prices_for_target)
 
-    # Рекомендации советников (Finam / MOEX всегда; LLM — только для strategy=ai)
+    # Рекомендации советников: LLM + MOEX + Finam → pick_best (приоритет AI)
     advisor_recommendations: Dict[str, Dict[str, Any]] = {}
     use_finam = getattr(self.cfg, "use_finam_advisor", False)
     use_moex = getattr(self.cfg, "use_moex_advisor", True)
     use_openrouter = getattr(self.cfg, "use_openrouter_advisor", True)
+    ai_mode = bool(getattr(self.cfg, "ai_mode", False))
+    ai_priority = bool(getattr(self.cfg, "advisor_ai_priority", True))
     instruments_list = list(self.instruments_cfg.values())
     learned_for_advisors = load_learned_params()
     from .advisor_ensemble import get_best_recommendations, resolve_rebalance_advisor_flags
 
+    llm_in_pick_best = ai_priority and use_openrouter and not ai_mode
     run_advisors, use_finam, use_moex, use_openrouter = resolve_rebalance_advisor_flags(
       use_finam=use_finam,
       use_moex=use_moex,
       use_openrouter=use_openrouter,
       instruments=instruments_list,
       learned=learned_for_advisors,
+      ai_mode=ai_mode,
+      llm_in_pick_best=llm_in_pick_best,
     )
     if run_advisors:
       last_prices = {}
@@ -411,6 +416,8 @@ class PortfolioManager:
           },
           market_client=mc,
           finam_history_days=getattr(self.cfg, "llm_history_days", 30) or 30,
+          ai_mode=ai_mode,
+          ai_priority=ai_priority and not ai_mode,
         )
         for figi, r in recs.items():
           if figi in targets:
@@ -546,7 +553,7 @@ class PortfolioManager:
       strategy_used = "—"
       if getattr(cfg, "strategy", None):
         try:
-          effective_strategy = get_effective_strategy(cfg, learned, regime)
+          effective_strategy = AI_STRATEGY if ai_mode else get_effective_strategy(cfg, learned, regime)
           effective_params = get_effective_params(cfg, learned, regime)
           use_ai = is_ai_strategy(effective_strategy)
           if use_ai:

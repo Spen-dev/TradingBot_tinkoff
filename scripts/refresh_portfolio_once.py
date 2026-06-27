@@ -25,6 +25,8 @@ def main() -> None:
     finam_cfg=cfg.finam,
     openrouter_cfg=cfg.openrouter,
     macro_news_cfg=getattr(cfg, "macro_news", None),
+    ai_mode=bool(getattr(cfg.portfolio, "ai_mode", False)),
+    ai_priority=bool(getattr(cfg.portfolio, "advisor_ai_priority", True)),
   )
   print(msg)
   print("changed:", changed)

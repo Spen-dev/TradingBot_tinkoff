@@ -50,3 +50,39 @@ def test_no_advisors_disabled():
     learned={},
   )
   assert run is False
+
+
+def test_ai_mode_hybrid_enables_quant_fallback():
+  run, finam, moex, or_ = resolve_rebalance_advisor_flags(
+    use_finam=True,
+    use_moex=True,
+    use_openrouter=True,
+    instruments=[_inst("SBER", strategy="adaptive")],
+    learned={},
+    ai_mode=True,
+  )
+  assert run is True
+  assert finam is True
+  assert moex is True
+  assert or_ is True
+
+
+def test_llm_in_pick_best_enables_openrouter_without_ai_strategy():
+  run, finam, moex, or_ = resolve_rebalance_advisor_flags(
+    use_finam=True,
+    use_moex=True,
+    use_openrouter=True,
+    instruments=[_inst("SBER", strategy="adaptive")],
+    learned={},
+    llm_in_pick_best=True,
+  )
+  assert run is True
+  assert or_ is True
+
+
+def test_advisor_ai_priority_bonus():
+  from tinkoff_bot.advisor_ensemble import _advisor_score_with_ai_priority, AI_PRIORITY_SCORE_BONUS
+
+  base = 1.0
+  assert _advisor_score_with_ai_priority("macro", base, True) == base + AI_PRIORITY_SCORE_BONUS
+  assert _advisor_score_with_ai_priority("moex", base, True) == base

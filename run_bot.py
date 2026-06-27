@@ -130,6 +130,8 @@ async def main() -> None:
           finam_cfg=getattr(cfg, "finam", None),
           openrouter_cfg=getattr(cfg, "openrouter", None),
           macro_news_cfg=getattr(cfg, "macro_news", None),
+          ai_mode=bool(getattr(cfg.portfolio, "ai_mode", False)),
+          ai_priority=bool(getattr(cfg.portfolio, "advisor_ai_priority", True)),
         ),
       )
     except Exception as e:
@@ -522,6 +524,8 @@ async def main() -> None:
       return OnRebalanceResult(em, False, False)
 
   async def on_select_strategy() -> str:
+    if getattr(cfg.portfolio, "ai_mode", False):
+      return "ai_mode: торговля через LLM (strategy=ai), автоподбор стратегий отключён."
     try:
       from tinkoff_bot.self_learn import run_strategy_selection, strategy_selection_llm_kwargs
       days = getattr(cfg.portfolio, "strategy_selection_days", 90) or 90
@@ -1343,7 +1347,7 @@ async def main() -> None:
         _snap_dir = Path(__file__).resolve().parent / "data"
         _snap_dir.mkdir(parents=True, exist_ok=True)
         (_snap_dir / "status_snapshot.json").write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
-        if auto_strategy_selection_on_start and not strategy_selection_start_done:
+        if auto_strategy_selection_on_start and not getattr(cfg.portfolio, "ai_mode", False) and not strategy_selection_start_done:
           strategy_selection_start_done = True
           try:
             from tinkoff_bot.self_learn import run_strategy_selection, strategy_selection_llm_kwargs
@@ -1368,7 +1372,7 @@ async def main() -> None:
               await send_alert(tg, "📊 Смена стратегий: " + ", ".join(f"{t} {o}→{n}" for t, o, n in changes), "strategy_changes", force=True)
           except Exception as e:
             logger.exception("Strategy selection on start: %s", e)
-        if strategy_selection_interval_days > 0:
+        if strategy_selection_interval_days > 0 and not getattr(cfg.portfolio, "ai_mode", False):
           last_sel_date: date | None = None
           if strategy_selection_state_file.exists():
             try:

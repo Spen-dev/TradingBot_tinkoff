@@ -56,60 +56,6 @@ def normalize_weights(
   return out
 
 
-def select_universe_via_llm(
-  chat_fn: ChatFn,
-  *,
-  candidates: List[str],
-  candidate_summary: Dict[str, str],
-  min_instruments: int,
-  max_instruments: int,
-  max_weight: float,
-  equity: float = 0.0,
-  market_context: str = "",
-  provider_label: str = "LLM",
-) -> Tuple[List[Dict[str, Any]], str]:
-  lines = [
-    f"Капитал портфеля: {equity:.0f} RUB." if equity > 0 else "Капитал: не указан.",
-    "Кандидаты (тикер: метрики):",
-  ]
-  for t in candidates:
-    key = t.upper()
-    lines.append(f"  {key}: {candidate_summary.get(key, candidate_summary.get(t, 'нет данных'))}")
-  if market_context:
-    lines.append(f"\nКонтекст рынка: {market_context}")
-
-  user_prompt = f"""Ты — портфельный аналитик российского фондового рынка (MOEX).
-
-{chr(10).join(lines)}
-
-Выбери оптимальный портфель ТОЛЬКО из перечисленных тикеров-кандидатов.
-
-Верни JSON без markdown:
-{{"portfolio": [{{"ticker": "<TICKER>", "target_weight": <0..1>, "reason": "<кратко>"}}], "summary": "<1-2 предложения>"}}
-
-Правила:
-- Выбери от {min_instruments} до {max_instruments} акций из списка кандидатов (не добавляй другие).
-- target_weight в сумме = 1.0.
-- Максимальный вес одной акции: {max_weight:.0%}.
-- Диверсификация по секторам, избегай концентрации в одной отрасли.
-- Учитывай momentum, волатильность и просадку; не гонись только за доходностью 5d."""
-
-  try:
-    text = chat_fn("Ты отвечаешь только валидным JSON без пояснений.", user_prompt)
-    if not text:
-      return [], f"{provider_label}: API ключ не задан"
-    data = parse_llm_json(text)
-    raw = data.get("portfolio") or data.get("recommendations") or []
-    summary = str(data.get("summary") or "").strip()
-    allowed = {t.upper() for t in candidates}
-    filtered = [r for r in raw if (r.get("ticker") or "").strip().upper() in allowed]
-    normalized = normalize_weights(filtered, max_weight, min_instruments, max_instruments)
-    return normalized, summary
-  except Exception as e:
-    logger.warning("%s dynamic portfolio: %s", provider_label, e)
-    return [], str(e)
-
-
 def get_recommendations_via_llm(
   chat_fn: ChatFn,
   instruments: List[Any],

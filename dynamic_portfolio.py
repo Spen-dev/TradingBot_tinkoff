@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import DynamicPortfolioConfig, InstrumentConfig
-from .strategy_names import normalize_strategy_name
+from .strategy_names import normalize_strategy_name, AI_STRATEGY
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +191,23 @@ def get_candidates(dp: DynamicPortfolioConfig, fallback_instruments: List[Instru
   return [i.ticker.upper() for i in fallback_instruments]
 
 
+def apply_ai_strategy_to_instruments(instruments: List[InstrumentConfig]) -> List[InstrumentConfig]:
+  """Принудительно strategy=ai для всех инструментов (режим ai_mode)."""
+  out: List[InstrumentConfig] = []
+  for inst in instruments:
+    out.append(
+      InstrumentConfig(
+        figi=inst.figi,
+        ticker=inst.ticker,
+        lot=inst.lot,
+        strategy=AI_STRATEGY,
+        target_weight=inst.target_weight,
+        strategy_params=inst.strategy_params,
+      )
+    )
+  return out
+
+
 def refresh_dynamic_portfolio(
   dp: DynamicPortfolioConfig,
   broker: Any,
@@ -203,6 +220,8 @@ def refresh_dynamic_portfolio(
   finam_cfg: Any = None,
   openrouter_cfg: Any = None,
   macro_news_cfg: Any = None,
+  ai_mode: bool = False,
+  ai_priority: bool = True,
 ) -> Tuple[List[InstrumentConfig], str, bool]:
   """
   Обновляет состав портфеля через все активные советники; при pick_best_advisor — лучший по бэктесту.
@@ -215,6 +234,8 @@ def refresh_dynamic_portfolio(
   if not force and state and not is_refresh_needed(state, dp.refresh_interval_days):
     instruments = instruments_from_state(state)
     if instruments:
+      if ai_mode:
+        instruments = apply_ai_strategy_to_instruments(instruments)
       updated = state.get("updated_at", "")[:16]
       return instruments, f"Динамический портфель из кэша ({updated})", False
 
@@ -226,8 +247,6 @@ def refresh_dynamic_portfolio(
     equity, _, _ = broker.get_equity_snapshot()
   except Exception:
     equity = 0.0
-
-  market_context = ""
 
   summary_map = build_candidate_summary(broker, candidates, history_days=history_days)
 
@@ -246,29 +265,6 @@ def refresh_dynamic_portfolio(
   market_client = CompositeMarketClient(finam_client=finam_client, moex_client=moex_client)
 
   proposals: List[Tuple[str, List[Dict[str, Any]], str]] = []
-
-  use_llm = dp.use_openrouter
-  if use_llm:
-    from .openrouter_advisor import select_universe_via_openrouter
-
-    or_primary = openrouter_model or getattr(openrouter_cfg, "model", "google/gemini-2.5-flash-lite") if openrouter_cfg else openrouter_model
-    or_models = list(getattr(openrouter_cfg, "models", None) or []) if openrouter_cfg else None
-    llm_sel, llm_summary = select_universe_via_openrouter(
-      candidates=candidates,
-      candidate_summary=summary_map,
-      min_instruments=dp.min_instruments,
-      max_instruments=dp.max_instruments,
-      max_weight=dp.max_weight_per_instrument,
-      model=or_primary,
-      models=or_models,
-      api_key_override=getattr(openrouter_cfg, "api_key", "") if openrouter_cfg else "",
-      base_url=getattr(openrouter_cfg, "base_url", "https://openrouter.ai/api/v1") if openrouter_cfg else "https://openrouter.ai/api/v1",
-      site_url=getattr(openrouter_cfg, "site_url", "") if openrouter_cfg else "",
-      equity=equity,
-      market_context=market_context,
-    )
-    if llm_sel:
-      proposals.append(("llm", llm_sel, llm_summary))
 
   if dp.use_macro and macro_news_cfg:
     from .macro_advisor import select_portfolio_via_macro
@@ -337,6 +333,7 @@ def refresh_dynamic_portfolio(
       proposals,
       market_client,
       history_days=max(history_days, 60),
+      ai_priority=ai_priority,
     )
 
   if not selections:
@@ -349,6 +346,8 @@ def refresh_dynamic_portfolio(
     return fallback_instruments, "Советники не вернули состав, изменений нет", False
 
   instruments = instruments_from_selections(selections, broker, dp.default_strategy)
+  if ai_mode:
+    instruments = apply_ai_strategy_to_instruments(instruments)
   if not instruments:
     msg = "Советник вернул тикеры, но FIGI не найдены — fallback"
     logger.warning("dynamic_portfolio: %s", msg)

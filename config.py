@@ -59,7 +59,7 @@ class TinkoffConfig:
 
 @dataclass
 class DynamicPortfolioConfig:
-  """Динамический состав портфеля: Finam / MOEX / OpenRouter."""
+  """Динамический состав портфеля: Finam / MOEX / Macro (RSS+LLM)."""
   enabled: bool = False
   candidates: List[str] = field(default_factory=list)
   max_instruments: int = 6
@@ -71,7 +71,6 @@ class DynamicPortfolioConfig:
   state_file: str = "data/dynamic_portfolio.json"
   use_finam: bool = True
   use_moex: bool = True
-  use_openrouter: bool = True
   use_macro: bool = True
   pick_best_advisor: bool = True
 
@@ -121,9 +120,8 @@ class OpenRouterConfig:
   api_key: str = ""
   model: str = "google/gemini-2.5-flash-lite"
   models: List[str] = field(default_factory=lambda: [
+    "google/gemini-2.0-flash-001",
     "deepseek/deepseek-chat",
-    "meta-llama/llama-3.3-70b-instruct",
-    "google/gemini-2.5-flash-lite",
   ])
   base_url: str = "https://openrouter.ai/api/v1"
   site_url: str = ""
@@ -206,6 +204,9 @@ class PortfolioConfig:
   use_moex_advisor: bool = True  # MOEX ISS: бесплатные количественные сигналы
   use_openrouter_advisor: bool = True  # OpenRouter LLM
   pick_best_advisor: bool = True  # выбрать лучший советник
+  ai_mode: bool = False  # strategy=ai + LLM primary; MOEX/Finam — fallback
+  advisor_ai_priority: bool = True  # LLM/macro + бонус при pick_best vs MOEX/Finam
+  allow_ai_in_strategy_selection: bool = True  # ai в автовыборе стратегии (бэктест)
   openrouter_model: str = "google/gemini-2.5-flash-lite"
   llm_cache_hours: float = 4.0  # кэш LLM-советников (часы)
   llm_history_days: int = 10  # дней истории в контексте LLM (доходность, волатильность)
@@ -360,6 +361,9 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     use_moex_advisor=p_raw.get("use_moex_advisor", True),
     use_openrouter_advisor=p_raw.get("use_openrouter_advisor", True),
     pick_best_advisor=p_raw.get("pick_best_advisor", True),
+    ai_mode=bool(p_raw.get("ai_mode", False)),
+    advisor_ai_priority=bool(p_raw.get("advisor_ai_priority", True)),
+    allow_ai_in_strategy_selection=bool(p_raw.get("allow_ai_in_strategy_selection", True)),
     openrouter_model=p_raw.get("openrouter_model", "google/gemini-2.5-flash-lite"),
     llm_cache_hours=float(p_raw.get("llm_cache_hours", p_raw.get("deepseek_cache_hours", 4.0)) or 4.0),
     llm_history_days=int(p_raw.get("llm_history_days", p_raw.get("deepseek_history_days", 10)) or 10),
@@ -405,7 +409,6 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     state_file=str(dp_raw.get("state_file", "data/dynamic_portfolio.json") or "data/dynamic_portfolio.json"),
     use_finam=bool(dp_raw.get("use_finam", True)),
     use_moex=bool(dp_raw.get("use_moex", True)),
-    use_openrouter=bool(dp_raw.get("use_openrouter", True)),
     use_macro=bool(dp_raw.get("use_macro", True)),
     pick_best_advisor=bool(dp_raw.get("pick_best_advisor", True)),
   )
@@ -438,9 +441,8 @@ def load_config(path: str = "config.yaml") -> AppConfig:
 
   or_raw = raw.get("openrouter") or {}
   or_models_raw = or_raw.get("models") or [
+    "google/gemini-2.0-flash-001",
     "deepseek/deepseek-chat",
-    "meta-llama/llama-3.3-70b-instruct",
-    "google/gemini-2.5-flash-lite",
   ]
   openrouter = OpenRouterConfig(
     api_key=os.getenv("OPENROUTER_API_KEY", or_raw.get("api_key", "")),

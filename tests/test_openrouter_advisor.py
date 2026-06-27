@@ -1,7 +1,7 @@
 """Тесты OpenRouter advisor."""
 from types import SimpleNamespace
 
-from tinkoff_bot.openrouter_advisor import _recommendations_cache_key, select_universe_via_openrouter
+from tinkoff_bot.openrouter_advisor import _recommendations_cache_key, get_recommendations
 
 
 def test_recommendations_cache_key_changes_with_portfolio():
@@ -19,14 +19,13 @@ class _Stub:
     self.target_weight = target_weight
 
 
-def test_select_universe_without_api_key():
-  sel, msg = select_universe_via_openrouter(
-    candidates=["SBER", "LKOH"],
-    candidate_summary={"SBER": "r5=1%", "LKOH": "r5=2%"},
-    min_instruments=2,
-    max_instruments=2,
-    max_weight=0.5,
+def test_get_recommendations_without_api_key():
+  recs = get_recommendations(
+    instruments=[_Stub("F1", "SBER", 0.5)],
+    positions={},
+    equity=100_000,
+    cash=50_000,
+    last_prices={"F1": 250.0},
     api_key_override="",
   )
-  assert sel == []
-  assert "OPENROUTER" in msg.upper()
+  assert recs == {}
