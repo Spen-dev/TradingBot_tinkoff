@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Any, Union
 
 import yaml
@@ -55,6 +55,20 @@ class TinkoffConfig:
   token: str
   account_id: str
   use_sandbox: bool
+
+
+@dataclass
+class DynamicPortfolioConfig:
+  """Динамический состав портфеля по советам DeepSeek."""
+  enabled: bool = False
+  candidates: List[str] = field(default_factory=list)
+  max_instruments: int = 6
+  min_instruments: int = 4
+  max_weight_per_instrument: float = 0.30
+  refresh_interval_days: int = 7
+  default_strategy: str = "deepseek"
+  fallback_to_static: bool = True
+  state_file: str = "data/dynamic_portfolio.json"
 
 
 @dataclass
@@ -186,6 +200,7 @@ class AppConfig:
   telegram: TelegramConfig
   web: WebConfig
   instruments: List[InstrumentConfig]
+  dynamic_portfolio: DynamicPortfolioConfig | None = None
 
 
 def load_config(path: str = "config.yaml") -> AppConfig:
@@ -310,10 +325,24 @@ def load_config(path: str = "config.yaml") -> AppConfig:
   web = WebConfig(**web_raw)
 
   instruments = []
-  for i in raw["instruments"]:
+  for i in raw.get("instruments") or []:
     d = dict(i)
     d.setdefault("lot", 1)
+    d.setdefault("strategy_params", {})
     instruments.append(InstrumentConfig(**d))
+
+  dp_raw = raw.get("dynamic_portfolio") or {}
+  dynamic_portfolio = DynamicPortfolioConfig(
+    enabled=bool(dp_raw.get("enabled", False)),
+    candidates=[str(t).upper() for t in (dp_raw.get("candidates") or [])],
+    max_instruments=int(dp_raw.get("max_instruments", 6) or 6),
+    min_instruments=int(dp_raw.get("min_instruments", 4) or 4),
+    max_weight_per_instrument=float(dp_raw.get("max_weight_per_instrument", 0.30) or 0.30),
+    refresh_interval_days=int(dp_raw.get("refresh_interval_days", 7) or 7),
+    default_strategy=str(dp_raw.get("default_strategy", "deepseek") or "deepseek"),
+    fallback_to_static=bool(dp_raw.get("fallback_to_static", True)),
+    state_file=str(dp_raw.get("state_file", "data/dynamic_portfolio.json") or "data/dynamic_portfolio.json"),
+  )
 
   return AppConfig(
     mode=mode,
@@ -323,6 +352,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     telegram=telegram,
     web=web,
     instruments=instruments,
+    dynamic_portfolio=dynamic_portfolio,
   )
 
 
@@ -344,11 +374,16 @@ def validate_config(cfg: "AppConfig") -> tuple[bool, list[str]]:
     errors.append("Telegram: не задан токен бота (TELEGRAM_TOKEN)")
   if not cfg.telegram.admin_chat_id:
     errors.append("Telegram: admin_chat_id = 0 — уведомления и управление не дойдут (TELEGRAM_ADMIN_CHAT_ID)")
-  if not cfg.instruments:
+  dp = getattr(cfg, "dynamic_portfolio", None)
+  dynamic_on = bool(dp and dp.enabled)
+  if not cfg.instruments and not dynamic_on:
     errors.append("Нет инструментов в конфиге")
-  total_w = sum(getattr(i, "target_weight", 0) for i in cfg.instruments)
-  if cfg.instruments and abs(total_w - 1.0) > 0.01:
-    errors.append(f"Сумма target_weight должна быть ~1.0, получено {total_w:.2f}")
+  if dynamic_on and dp and not dp.candidates and not cfg.instruments:
+    errors.append("dynamic_portfolio.enabled: укажите candidates или instruments как fallback")
+  if not dynamic_on:
+    total_w = sum(getattr(i, "target_weight", 0) for i in cfg.instruments)
+    if cfg.instruments and abs(total_w - 1.0) > 0.01:
+      errors.append(f"Сумма target_weight должна быть ~1.0, получено {total_w:.2f}")
   for i in cfg.instruments:
     if not getattr(i, "figi", "").strip():
       errors.append(f"Инструмент без figi: {getattr(i, 'ticker', '')}")

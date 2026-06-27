@@ -199,6 +199,9 @@ class PortfolioManager:
     self.broker = broker
     self.risk = risk
 
+  def update_instruments(self, instruments: List[InstrumentConfig]) -> None:
+    self.instruments_cfg = {i.figi: i for i in instruments}
+
   def _target_values(self, equity: float, prices: Optional[Dict[str, float]] = None) -> Dict[str, float]:
     """Целевые суммы в рублях. Веса из learned_params (если optimize_weights), иначе из конфига."""
     if getattr(self.cfg, "rebalance_by_price", False) and prices:
@@ -647,6 +650,35 @@ class PortfolioManager:
         remaining_cash -= cost
       else:
         sells.append(order)
+
+    # Продажа бумаг, вышедших из динамического состава портфеля
+    for figi, pos in positions.items():
+      if figi in self.instruments_cfg or pos.quantity <= 0:
+        continue
+      try:
+        ticker = self.broker.get_instrument_ticker(figi)
+        lot = self.broker.get_lot_size(figi)
+      except Exception as e:
+        logger.debug("exit_universe: пропуск %s: %s", figi, e)
+        continue
+      price = pos.current_price if pos.current_price > 0 else self.broker.get_last_price(figi)
+      if price <= 0:
+        continue
+      qty = int(math.floor(pos.quantity / lot)) * lot
+      if qty < lot:
+        continue
+      sells.append(
+        RebalanceOrder(
+          figi=figi,
+          ticker=ticker,
+          quantity=qty,
+          direction=OrderDirection.ORDER_DIRECTION_SELL,
+          execution_price=price,
+          signal_strength=1.0,
+          strategy_used="exit_universe",
+        )
+      )
+      logger.info("exit_universe: продажа %s qty=%d (не в текущем портфеле)", ticker, qty)
 
     # Сначала продажи, потом покупки (от дешёвых к дорогим)
     pending_buys.sort(key=lambda o: o.quantity * o.execution_price)

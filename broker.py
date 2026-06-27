@@ -53,6 +53,7 @@ class TinkoffBroker:
 
   def __init__(self, cfg: TinkoffConfig):
     self._cfg = cfg
+    self._ticker_cache: Dict[str, Tuple[str, int]] = {}
 
   @contextmanager
   def _client(self):
@@ -246,12 +247,38 @@ class TinkoffBroker:
 
   def get_lot_size(self, figi: str) -> int:
     """Размер лота по FIGI. Нужен для округления количества при выставлении заявок."""
+    return self.resolve_figi(figi)[1]
+
+  def resolve_figi(self, figi: str) -> Tuple[str, int]:
+    """(figi, lot) по FIGI."""
     with self._client() as client:
       resp = client.instruments.share_by(
         id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_FIGI,
         id=figi,
       )
-    return max(1, getattr(resp.instrument, "lot", 1))
+    lot = max(1, getattr(resp.instrument, "lot", 1))
+    return figi, lot
+
+  def resolve_ticker(self, ticker: str) -> Tuple[str, int]:
+    """(figi, lot) по тикеру MOEX (кэш списка shares)."""
+    key = ticker.upper()
+    if key in self._ticker_cache:
+      return self._ticker_cache[key]
+    with self._client() as client:
+      for share in client.instruments.shares().instruments:
+        if share.ticker.upper() == key:
+          result = (share.figi, max(1, getattr(share, "lot", 1)))
+          self._ticker_cache[key] = result
+          return result
+    raise ValueError(f"Ticker not found: {ticker}")
+
+  def get_instrument_ticker(self, figi: str) -> str:
+    with self._client() as client:
+      resp = client.instruments.share_by(
+        id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_FIGI,
+        id=figi,
+      )
+    return str(getattr(resp.instrument, "ticker", figi) or figi)
 
   def set_sandbox_balance(self, amount: float, currency: str = "RUB") -> None:
     if not self._cfg.use_sandbox:

@@ -89,8 +89,48 @@ async def main() -> None:
     except Exception:
       pass
   risk = RiskManager(cfg.risk)
+  static_instruments = list(cfg.instruments)
+  dp_cfg = getattr(cfg, "dynamic_portfolio", None)
   pm = PortfolioManager(cfg.portfolio, cfg.instruments, broker, risk)
   broker_timeout = max(5.0, float(getattr(cfg.portfolio, "request_timeout_seconds", 30) or 30))
+
+  async def apply_dynamic_portfolio(force: bool = False, notify: bool = False) -> str:
+    if not dp_cfg or not dp_cfg.enabled:
+      return "Динамический портфель отключён (dynamic_portfolio.enabled=false)."
+    from tinkoff_bot.dynamic_portfolio import refresh_dynamic_portfolio
+    loop = asyncio.get_running_loop()
+    try:
+      instruments, msg, changed = await loop.run_in_executor(
+        None,
+        lambda: refresh_dynamic_portfolio(
+          dp_cfg,
+          broker,
+          static_instruments,
+          force=force,
+          history_days=getattr(cfg.portfolio, "deepseek_history_days", 10) or 10,
+          deepseek_model=getattr(cfg.portfolio, "deepseek_model", "deepseek-chat"),
+          base_dir=base_dir,
+        ),
+      )
+    except Exception as e:
+      logger.exception("dynamic_portfolio: %s", e)
+      return f"Ошибка обновления состава: {e}"
+    if instruments:
+      cfg.instruments = instruments
+      pm.update_instruments(instruments)
+      if changed:
+        logger.info("dynamic_portfolio обновлён: %s", msg)
+        if notify:
+          await send_alert(tg, f"📊 Состав портфеля обновлён: {msg}", "dynamic_portfolio", force=True)
+    return msg
+
+  async def on_refresh_portfolio() -> str:
+    return await apply_dynamic_portfolio(force=True)
+
+  if dp_cfg and dp_cfg.enabled:
+    dp_msg = await apply_dynamic_portfolio(force=False)
+    logger.info("Динамический портфель при старте: %s", dp_msg)
+    await send_alert(tg, f"📊 Динамический портфель: {dp_msg}", "dynamic_portfolio", force=True)
 
   async def broker_get_cash_async():
     loop = asyncio.get_running_loop()
@@ -605,6 +645,7 @@ async def main() -> None:
     on_unpause=on_unpause,
     on_help_extra=on_help_extra,
     on_daily_digest=on_daily_digest_manual,
+    on_refresh_portfolio=on_refresh_portfolio,
     is_started=lambda: started,
     on_confirm=on_confirm_received,
     get_mode=lambda: getattr(cfg, "mode", "sandbox") or "sandbox",
@@ -733,6 +774,7 @@ async def main() -> None:
     strategy_selection_state_file = base_dir / "data" / "strategy_selection_state.json"
     last_day_reset_date: date | None = None
     last_log_cleanup_date: date | None = None
+    last_dynamic_portfolio_date: date | None = None
     last_weekly_report_date: date | None = None
     alert_live_ping_hours = getattr(cfg.portfolio, "alert_live_ping_hours", 0.0) or 0.0
     weekly_weekday = getattr(cfg.portfolio, "weekly_report_weekday", 6) or 6
@@ -928,6 +970,12 @@ async def main() -> None:
                 logger.info("Автоочистка логов: удалено файлов %d (хранение %d дн.)", removed, log_retention)
             except Exception as e:
               logger.warning("Автоочистка логов: %s", e)
+          if dp_cfg and dp_cfg.enabled and _in_rebalance_window() and last_dynamic_portfolio_date != today:
+            last_dynamic_portfolio_date = today
+            try:
+              await apply_dynamic_portfolio(force=False, notify=True)
+            except Exception as e:
+              logger.warning("dynamic_portfolio (планировщик): %s", e)
           if last_day_reset_date is None and day_start_equity is not None:
             last_day_reset_date = today
           interval_sched_due = ri_hours > 0 and (
@@ -1117,7 +1165,6 @@ async def main() -> None:
                 model_path = params.get("rl_model_path", f"data/rl_model_{inst.ticker}.zip")
                 meta_path = base_dir / Path(model_path).with_suffix(".json")
                 if meta_path.exists():
-                  import json
                   meta = json.loads(meta_path.read_text(encoding="utf-8"))
                   dt_str = meta.get("date", "")[:10]
                   if len(dt_str) >= 10:

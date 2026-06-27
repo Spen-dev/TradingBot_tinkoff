@@ -40,7 +40,7 @@ portfolio:
   rl_train_on_start: true      # Обучать RL-модели при старте робота
   rl_train_interval_days: 14   # Периодическое переобучение RL раз в N дней (0 = только при старте)
   rl_train_days: 365           # Глубина истории для обучения RL (дней)
-  rl_train_timesteps: 50000    # Шагов PPO при обучении RL
+  rl_train_timesteps: 30000    # Шагов PPO при обучении RL (меньше — быстрее старт на VPS)
   rl_train_walk_forward_ratio: 0.7  # Доля данных на обучение, остальное — валидация (0.5–0.9)
   self_learn_train_ratio: 0.7  # Доля выборки на обучение при самообучении
   self_learn_use_sharpe: true  # Оптимизировать по Шарпу (иначе по PnL)
@@ -67,7 +67,7 @@ portfolio:
   max_overweight_without_signal_pct: 0.0  # При перевесе > N% разрешать сокращение без sell (0=выкл)
   use_order_book_for_limits: true  # Использовать стакан (bid/ask/mid) при расчёте лимитной цены (экспериментально)
   # Режим рынка и защита
-  market_index_figi: "BBG004730JJ5"  # FIGI индекса (напр. MOEX) для kill-switch и волатильности
+  market_index_figi: "BBG004730JJ5"  # Акция MOEX (биржа) — только для kill-switch/волатильности, не в instruments
   market_panic_drop_pct: 0.05  # Дневное падение индекса (доля) — глобальная пауза до конца дня
   market_vol_low_threshold_pct: 0.01   # |изменение индекса| ниже — низкая волатильность
   market_vol_high_threshold_pct: 0.03  # |изменение индекса| выше — высокая волатильность
@@ -88,7 +88,7 @@ portfolio:
   alert_drawdown_pct: 0.05     # Алерт при просадке портфеля >= N% (0=выкл)
   alert_daily_loss_pct: 0.02   # Алерт при дневном убытке >= N% от старта дня (0=выкл)
   alert_live_ping_hours: 24    # Раз в N ч отправлять «Робот работает» (песочница как в бою)
-  use_deepseek_advisor: true # true = для инструментов со стратегией deepseek запрашивать рекомендации у DeepSeek API
+  use_deepseek_advisor: true # true = запрашивать рекомендации DeepSeek (веса и сигналы buy/sell/hold)
   deepseek_model: "deepseek-chat"  # Модель DeepSeek (ключ DEEPSEEK_API_KEY в .env)
   auto_strategy_selection_on_start: true # true = при старте выбрать лучшую стратегию по бэктесту для каждого инструмента
   strategy_selection_days: 90    # глубина истории (дней) для выбора стратегии
@@ -100,6 +100,29 @@ portfolio:
   rebalance_decisions_log: true  # писать в data/logs/rebalance_decisions.log решения ребаланса
   log_retention_days: 14        # хранить ротированные bot.log.* (дней); автоочистка раз в сутки
   aggressive_rebalance: true
+
+# Динамический состав портфеля: DeepSeek выбирает акции из пула кандидатов
+dynamic_portfolio:
+  enabled: true
+  refresh_interval_days: 7      # пересборка состава раз в N дней (0 = только вручную /refresh_portfolio)
+  max_instruments: 6
+  min_instruments: 4
+  max_weight_per_instrument: 0.30
+  default_strategy: deepseek    # стратегия для выбранных бумаг (deepseek | rl | momentum и т.д.)
+  fallback_to_static: true      # при ошибке API — instruments из конфига ниже
+  candidates:
+    - SBER
+    - LKOH
+    - GMKN
+    - PLZL
+    - MGNT
+    - TATN
+    - NVTK
+    - ROSN
+    - MTSS
+    - CHMF
+    - AFLT
+    - NLMK
 
 risk:
   max_drawdown: 0.15           # Макс. допустимая просадка от пика (15%) — блокировка торговли
@@ -122,47 +145,34 @@ web:
   dashboard_url: "http://YOUR_VPS_IP:8000/dashboard"  # URL дашборда для кнопки в Telegram
 
 instruments:
-  # figi — идентификатор бумаги, ticker — тикер, lot — размер лота, strategy — стратегия (rl, momentum, ...)
-  # target_weight — целевая доля в портфеле (сумма по всем ≈ 1), strategy_params — параметры стратегии
-  - figi: BBG004730ZJ9
-    ticker: VTBR
-    lot: 10
-    strategy: rl
-    target_weight: 0.2
-    strategy_params:
-      rl_model_path: data/rl_model_VTBR.zip
-  - figi: BBG004730RP0
-    ticker: GAZP
-    lot: 10
-    strategy: rl
-    target_weight: 0.2
-    strategy_params:
-      rl_model_path: data/rl_model_GAZP.zip
-  - figi: BBG004730JJ5
-    ticker: MOEX
-    lot: 1
-    strategy: rl
-    target_weight: 0.2
-    strategy_params:
-      rl_model_path: data/rl_model_MOEX.zip
-  - figi: BBG004S681B4
-    ticker: NLMK
-    lot: 10
-    strategy: rl
-    target_weight: 0.2
-    strategy_params:
-      rl_model_path: data/rl_model_NLMK.zip
+  # Fallback, если DeepSeek недоступен (при dynamic_portfolio.enabled=true)
   - figi: BBG004730N88
     ticker: SBER
-    lot: 10
-    strategy: rl
-    target_weight: 0.1
-    strategy_params:
-      rl_model_path: data/rl_model_SBER.zip
-  - figi: BBG004731354
+    lot: 1
+    strategy: deepseek
+    target_weight: 0.25
+  - figi: BBG004731032
     ticker: LKOH
     lot: 1
-    strategy: rl
-    target_weight: 0.1
-    strategy_params:
-      rl_model_path: data/rl_model_LKOH.zip
+    strategy: deepseek
+    target_weight: 0.20
+  - figi: BBG004731489
+    ticker: GMKN
+    lot: 10
+    strategy: deepseek
+    target_weight: 0.15
+  - figi: BBG000R607Y3
+    ticker: PLZL
+    lot: 1
+    strategy: deepseek
+    target_weight: 0.15
+  - figi: BBG004RVFCY3
+    ticker: MGNT
+    lot: 1
+    strategy: deepseek
+    target_weight: 0.10
+  - figi: BBG004RVFFC0
+    ticker: TATN
+    lot: 1
+    strategy: deepseek
+    target_weight: 0.15
