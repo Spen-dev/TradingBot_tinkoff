@@ -2,6 +2,9 @@
 
 Автоматический ребаланс портфеля MOEX (Tinkoff Invest API): стратегии adaptive / RL / ai, динамический состав (Finam, MOEX ISS, macro-новости, OpenRouter LLM), Telegram-управление, Docker на VPS.
 
+**Copyright © 2026 Spn. All rights reserved.**  
+Исходный код защищён проприетарной лицензией — см. [LICENSE](LICENSE). Копирование, форки, деплой и коммерческое использование **без письменного разрешения запрещены**. Просмотр репозитория не даёт права на использование.
+
 ## Возможности
 
 - **Брокер:** Tinkoff Invest (sandbox / real), retry при сбоях API
@@ -19,8 +22,8 @@
 ## Установка
 
 ```bash
-git clone <repo>
-cd tinkoff_bot
+git clone https://github.com/Spen-dev/TradingBot_tinkoff.git
+cd TradingBot_tinkoff
 python -m venv .venv
 .venv\Scripts\activate   # Windows
 # source .venv/bin/activate   # Linux/macOS
@@ -43,9 +46,9 @@ pytest tests/ -v
    - `TELEGRAM_TOKEN` — токен бота Telegram
    - `TELEGRAM_ADMIN_CHAT_ID` — ID чата, с которого разрешено управление
 
-   Опционально: `OPENROUTER_API_KEY` (LLM и macro-советник), `FINAM_API_TOKEN`, `SANDBOX_TARGET_CASH`, `DRY_RUN=true`.
+   Опционально: `OPENROUTER_API_KEY` (LLM и macro-советник), `FINAM_API_TOKEN`, `SANDBOX_TARGET_CASH`, `DRY_RUN=true`, `DASHBOARD_URL` (URL дашборда — **только в `.env`**, не коммитить IP).
 
-2. **config.yaml** — режим, портфель, риски, инструменты. Все параметры подписаны в файле. Режим `mode: sandbox` или `mode: real` (в real ужесточаются лимиты рисков).
+2. **config.yaml** — режим, портфель, риски, инструменты. Секреты и URL инфраструктуры в репозиторий не попадают.
 
 ## Docker и деплой на VPS
 
@@ -113,8 +116,19 @@ tar -czvf backup_$(date +%Y%m%d_%H%M).tar.gz data learned_params
 
 ## Мониторинг
 
-- **Health-check:** HTTP `GET http://<host>:<port>/health` — возвращает 200 и JSON с полями `broker_ok`, `config_ok`, `ready`. Порт задаётся в `config.yaml` (секция `web`).
-- **Метрики Prometheus:** `GET http://<host>:<port>/metrics` — счётчики и гаужи (equity, drawdown, сделки, ошибки). Используйте тот же порт, что и для health.
+- **Health-check:** HTTP `GET http://<host>:<port>/health` — возвращает 200 и JSON с полями `broker_ok`, `config_ok`, `ready`. Порт задаётся в `config.yaml` (секция `web`). **Не открывайте порт наружу без firewall** — дашборд и `/metrics` без авторизации.
+- **Метрики Prometheus:** `GET http://<host>:<port>/metrics` — equity, drawdown, сделки, ошибки.
+
+## Лицензия и конфиденциальность
+
+| Что | Где хранится |
+|-----|----------------|
+| Код | GitHub (проприетарная [LICENSE](LICENSE)) |
+| API-ключи, IP, chat_id | `.env` на VPS (в git **не** коммитятся) |
+| Обученные параметры, логи, сделки | `learned_params/`, `data/` на сервере |
+
+Запрещено без разрешения автора: форки для запуска, перепродажа, публикация форков, использование в коммерческих сервисах.  
+Контакт по лицензированию: spen69@mail.ru
 
 ## Тесты
 
