@@ -835,6 +835,19 @@ async def main() -> None:
     auto_strategy_selection_on_start = getattr(cfg.portfolio, "auto_strategy_selection_on_start", False)
     strategy_selection_interval_days = getattr(cfg.portfolio, "strategy_selection_interval_days", 0) or 0
     strategy_selection_state_file = base_dir / "data" / "strategy_selection_state.json"
+
+    def _strategy_selection_last_date() -> date | None:
+      if not strategy_selection_state_file.exists():
+        return None
+      try:
+        data = json.loads(strategy_selection_state_file.read_text(encoding="utf-8"))
+        s = str(data.get("last_date", ""))[:10]
+        if s:
+          return datetime.strptime(s, "%Y-%m-%d").date()
+      except Exception:
+        pass
+      return None
+
     last_day_reset_date: date | None = None
     last_log_cleanup_date: date | None = None
     last_dynamic_portfolio_date: date | None = None
@@ -1052,8 +1065,11 @@ async def main() -> None:
                 ),
               )
               if do_refresh:
-                logger.info("macro news trigger: %s", reason)
-                await apply_dynamic_portfolio(force=True, notify=True)
+                if cfg.portfolio.is_rebalance_trading_day(today):
+                  logger.info("macro news trigger: %s", reason)
+                  await apply_dynamic_portfolio(force=True, notify=True)
+                else:
+                  logger.info("macro news trigger: %s — пропуск (MOEX не торгует)", reason)
             except Exception as e:
               logger.warning("macro news check: %s", e)
 
@@ -1124,7 +1140,10 @@ async def main() -> None:
                     last_macro_index_trigger_date = today
                     logger.info("macro index trigger: ret=%.2f%%", ret * 100)
                     try:
-                      await apply_dynamic_portfolio(force=True, notify=True)
+                      if cfg.portfolio.is_rebalance_trading_day(today):
+                        await apply_dynamic_portfolio(force=True, notify=True)
+                      else:
+                        logger.info("macro index trigger: пропуск (MOEX не торгует)")
                     except Exception as e:
                       logger.warning("macro index refresh: %s", e)
             except Exception:
@@ -1382,46 +1401,44 @@ async def main() -> None:
         (_snap_dir / "status_snapshot.json").write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
         if auto_strategy_selection_on_start and not getattr(cfg.portfolio, "ai_mode", False) and not strategy_selection_start_done:
           strategy_selection_start_done = True
-          try:
-            from tinkoff_bot.self_learn import run_strategy_selection, strategy_selection_llm_kwargs
-            loop = asyncio.get_running_loop()
-            sel_days = getattr(cfg.portfolio, "strategy_selection_days", 90) or 90
-            msg, changes = await loop.run_in_executor(
-              None,
-              lambda: run_strategy_selection(
-                broker, cfg.instruments, days=sel_days,
-                commission_rate=getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003,
-                train_ratio=getattr(cfg.portfolio, "self_learn_train_ratio", 0.7) or 0.7,
-                use_sharpe=getattr(cfg.portfolio, "self_learn_use_sharpe", True),
-                min_trades=getattr(cfg.portfolio, "self_learn_min_trades", 5) or 5,
-                risk_penalty=getattr(cfg.portfolio, "self_learn_risk_penalty", 0.5) or 0.5,
-                strategy_change_min_delta=getattr(cfg.portfolio, "strategy_change_min_delta", 0.05) or 0,
-                strategy_diversity_max_share=getattr(cfg.portfolio, "strategy_diversity_max_share", 0) or 0,
-                **strategy_selection_llm_kwargs(cfg),
-              ),
+          last_sel_at_start = _strategy_selection_last_date()
+          if last_sel_at_start is not None:
+            logger.info(
+              "Strategy selection on start: пропуск (уже выполнялся %s)",
+              last_sel_at_start.isoformat(),
             )
-            await send_alert(tg, "📊 Выбор стратегий при старте:\n" + msg, "strategy_selection", force=True)
-            if changes:
-              await send_alert(tg, "📊 Смена стратегий: " + ", ".join(f"{t} {o}→{n}" for t, o, n in changes), "strategy_changes", force=True)
-          except Exception as e:
-            logger.exception("Strategy selection on start: %s", e)
-          finally:
-            if strategy_selection_start_done:
+          else:
+            try:
+              from tinkoff_bot.self_learn import run_strategy_selection, strategy_selection_llm_kwargs
+              loop = asyncio.get_running_loop()
+              sel_days = getattr(cfg.portfolio, "strategy_selection_days", 90) or 90
+              msg, changes = await loop.run_in_executor(
+                None,
+                lambda: run_strategy_selection(
+                  broker, cfg.instruments, days=sel_days,
+                  commission_rate=getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003,
+                  train_ratio=getattr(cfg.portfolio, "self_learn_train_ratio", 0.7) or 0.7,
+                  use_sharpe=getattr(cfg.portfolio, "self_learn_use_sharpe", True),
+                  min_trades=getattr(cfg.portfolio, "self_learn_min_trades", 5) or 5,
+                  risk_penalty=getattr(cfg.portfolio, "self_learn_risk_penalty", 0.5) or 0.5,
+                  strategy_change_min_delta=getattr(cfg.portfolio, "strategy_change_min_delta", 0.05) or 0,
+                  strategy_diversity_max_share=getattr(cfg.portfolio, "strategy_diversity_max_share", 0) or 0,
+                  **strategy_selection_llm_kwargs(cfg),
+                ),
+              )
+              await send_alert(tg, "📊 Выбор стратегий при старте:\n" + msg, "strategy_selection", force=True)
+              if changes:
+                await send_alert(tg, "📊 Смена стратегий: " + ", ".join(f"{t} {o}→{n}" for t, o, n in changes), "strategy_changes", force=True)
+            except Exception as e:
+              logger.exception("Strategy selection on start: %s", e)
+            finally:
               strategy_selection_state_file.parent.mkdir(parents=True, exist_ok=True)
               strategy_selection_state_file.write_text(
                 json.dumps({"last_date": today.isoformat()}, ensure_ascii=False),
                 encoding="utf-8",
               )
         if strategy_selection_interval_days > 0 and not getattr(cfg.portfolio, "ai_mode", False):
-          last_sel_date: date | None = None
-          if strategy_selection_state_file.exists():
-            try:
-              data = json.loads(strategy_selection_state_file.read_text(encoding="utf-8"))
-              s = data.get("last_date", "")[:10]
-              if s:
-                last_sel_date = datetime.strptime(s, "%Y-%m-%d").date()
-            except Exception:
-              pass
+          last_sel_date = _strategy_selection_last_date()
           if last_sel_date is None or (today - last_sel_date).days >= strategy_selection_interval_days:
             try:
               from tinkoff_bot.self_learn import run_strategy_selection, strategy_selection_llm_kwargs

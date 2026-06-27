@@ -24,7 +24,7 @@ portfolio:
   limit_price_pct_buy: 0       # 0 = использовать limit_price_pct; иначе свой % для покупок
   limit_price_pct_sell: 0      # 0 = использовать limit_price_pct; иначе свой % для продаж
   cancel_open_orders_before_rebalance: true  # Отменять активные лимитные заявки робота по тем же FIGI перед ребалансом
-  rebalance_by_price: true     # Считать целевые суммы по текущим ценам
+  rebalance_by_price: true     # Актуальные цены для лотов/заявок (веса — из конфига/learned, не по цене акции)
   rebalance_on_drift: true     # Ребаланс по дрейфу весов между проверками
   rebalance_drift_pct: 0.05    # Боевой порог дрейфа (5% — меньше лишних сделок и комиссий)
   rebalance_check_interval_minutes: 30   # Проверка дрейфа каждые 30 мин

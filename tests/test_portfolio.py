@@ -69,3 +69,27 @@ def test_target_values_normalizes_learned_weights(portfolio_cfg, risk_cfg, instr
     targets = pm._target_values(100_000.0)
     assert abs(sum(targets.values()) - 100_000.0) < 1.0
     assert abs(targets["F1"] - 90_000.0) < 1.0
+
+
+def test_target_values_ignores_prices_with_rebalance_by_price(portfolio_cfg, risk_cfg, instruments):
+    broker = MagicMock()
+    risk = RiskManager(risk_cfg)
+    pm = PortfolioManager(portfolio_cfg, instruments, broker, risk)
+    prices = {"F1": 100.0, "F2": 500.0}
+    targets = pm._target_values(100_000.0, prices)
+    assert abs(targets["F1"] - 50_000.0) < 1.0
+    assert abs(targets["F2"] - 50_000.0) < 1.0
+
+
+def test_rebalance_needed_uses_config_weights_not_prices(portfolio_cfg, risk_cfg, instruments):
+    broker = MagicMock()
+    pos_f1 = MagicMock()
+    pos_f1.value = 50_000.0
+    pos_f2 = MagicMock()
+    pos_f2.value = 50_000.0
+    broker.get_equity_snapshot.return_value = (100_000.0, 0.0, {"F1": pos_f1, "F2": pos_f2})
+    broker.get_last_price.side_effect = lambda figi: 100.0 if figi == "F1" else 500.0
+
+    risk = RiskManager(risk_cfg)
+    pm = PortfolioManager(portfolio_cfg, instruments, broker, risk)
+    assert pm.rebalance_needed(100_000.0, 0.05) is False

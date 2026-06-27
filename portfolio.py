@@ -207,12 +207,8 @@ class PortfolioManager:
   def update_instruments(self, instruments: List[InstrumentConfig]) -> None:
     self.instruments_cfg = {i.figi: i for i in instruments}
 
-  def _target_values(self, equity: float, prices: Optional[Dict[str, float]] = None) -> Dict[str, float]:
-    """Целевые суммы в рублях. Веса из learned_params (если optimize_weights), иначе из конфига."""
-    if getattr(self.cfg, "rebalance_by_price", False) and prices:
-      total_price = sum(prices.get(f, 0.0) for f in self.instruments_cfg)
-      if total_price > 0:
-        return {figi: equity * (prices.get(figi, 0.0) / total_price) for figi in self.instruments_cfg}
+  def _effective_weights(self) -> Dict[str, float]:
+    """Нормализованные доли портфеля из learned_params или конфига."""
     learned = load_learned_params()
     weights: Dict[str, float] = {}
     for ins in self.instruments_cfg.values():
@@ -220,7 +216,21 @@ class PortfolioManager:
     total_w = sum(weights.values())
     if total_w <= 0:
       return {ins.figi: 0.0 for ins in self.instruments_cfg.values()}
-    return {figi: equity * (w / total_w) for figi, w in weights.items()}
+    return {figi: w / total_w for figi, w in weights.items()}
+
+  @staticmethod
+  def _scale_targets_to_equity(targets: Dict[str, float], equity: float) -> Dict[str, float]:
+    total = sum(targets.values())
+    if total <= 0 or abs(total - equity) < 0.01:
+      return targets
+    scale = equity / total
+    return {figi: value * scale for figi, value in targets.items()}
+
+  def _target_values(self, equity: float, prices: Optional[Dict[str, float]] = None) -> Dict[str, float]:
+    """Целевые суммы в рублях. Веса из learned_params или конфига; prices — только для совместимости API."""
+    _ = prices
+    weights = self._effective_weights()
+    return {figi: equity * w for figi, w in weights.items()}
 
   def rebalance_needed(self, day_start_equity: float, drift_pct: float) -> bool:
     """Ребаланс нужен, если какая-то доля отклонилась от целевой больше чем на drift_pct (0.05 = 5%)."""
@@ -230,13 +240,7 @@ class PortfolioManager:
     risk_state: RiskState = self.risk.update_equity(equity, day_start_equity)
     if not self.risk.is_trading_allowed(risk_state):
       return False
-    prices_for_target: Optional[Dict[str, float]] = None
-    if getattr(self.cfg, "rebalance_by_price", False):
-      prices_for_target = {}
-      for figi in self.instruments_cfg:
-        pos = positions.get(figi)
-        prices_for_target[figi] = pos.current_price if pos else self.broker.get_last_price(figi)
-    targets = self._target_values(equity, prices_for_target)
+    targets = self._target_values(equity)
     for figi in self.instruments_cfg:
       current_value = positions[figi].value if positions.get(figi) else 0.0
       target_value = targets.get(figi, 0.0)
@@ -270,13 +274,7 @@ class PortfolioManager:
     except Exception:
       size_scale = 1.0
 
-    prices_for_target: Optional[Dict[str, float]] = None
-    if getattr(self.cfg, "rebalance_by_price", False):
-      prices_for_target = {}
-      for figi in self.instruments_cfg:
-        pos = positions.get(figi)
-        prices_for_target[figi] = pos.current_price if pos else self.broker.get_last_price(figi)
-    targets = self._target_values(equity, prices_for_target)
+    targets = self._target_values(equity)
 
     # Рекомендации советников: LLM + MOEX + Finam → pick_best (приоритет AI)
     advisor_recommendations: Dict[str, Dict[str, Any]] = {}
@@ -426,6 +424,7 @@ class PortfolioManager:
             tw = r.get("target_weight")
             if tw is not None:
               targets[figi] = equity * max(0.0, min(1.0, float(tw)))
+        targets = self._scale_targets_to_equity(targets, equity)
         advisor_recommendations = recs
         if advisor_used and advisor_used != "none":
           logger.debug("Advisor rebalance: source=%s instruments=%d", advisor_used, len(recs))
