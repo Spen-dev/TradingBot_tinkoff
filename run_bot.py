@@ -44,12 +44,13 @@ def _get_version() -> str:
 
 async def main() -> None:
   robot_started_at = datetime.now()
-  if setup_logging:
-    setup_logging(json_log=True, console=True)
-  app_version = _get_version()
-  logger.info("tinkoff_bot v%s", app_version)
   base_dir = Path(__file__).resolve().parent
   cfg = load_config(str(base_dir / "config.yaml"))
+  if setup_logging:
+    log_retention = max(1, int(getattr(cfg.portfolio, "log_retention_days", 14) or 14))
+    setup_logging(json_log=True, console=True, log_retention_days=log_retention)
+  app_version = _get_version()
+  logger.info("tinkoff_bot v%s", app_version)
   if not getattr(cfg.portfolio, "auto_rebalance_when_stopped", False):
     logger.warning(
       "Авторебаланс и дрейф по расписанию не идут без «Старт» в Telegram. "
@@ -72,7 +73,10 @@ async def main() -> None:
   except Exception as e:
     print("Предупреждение (learned_params):", e)
 
-  tg = TelegramController(cfg.telegram)
+  tg = TelegramController(
+    cfg.telegram,
+    display_timezone=getattr(cfg.portfolio, "trading_timezone", "") or "",
+  )
   ok, errs = validate_config(cfg)
   if not ok:
     await send_alert(tg, "⚠️ Ошибки конфига: " + "; ".join(errs), "config_error", force=True)
@@ -728,6 +732,7 @@ async def main() -> None:
     strategy_selection_interval_days = getattr(cfg.portfolio, "strategy_selection_interval_days", 0) or 0
     strategy_selection_state_file = base_dir / "data" / "strategy_selection_state.json"
     last_day_reset_date: date | None = None
+    last_log_cleanup_date: date | None = None
     last_weekly_report_date: date | None = None
     alert_live_ping_hours = getattr(cfg.portfolio, "alert_live_ping_hours", 0.0) or 0.0
     weekly_weekday = getattr(cfg.portfolio, "weekly_report_weekday", 6) or 6
@@ -913,6 +918,16 @@ async def main() -> None:
               last_day_reset_date = today
             except Exception:
               pass
+          if last_log_cleanup_date != today:
+            last_log_cleanup_date = today
+            try:
+              from tinkoff_bot.logging_config import cleanup_old_logs
+              log_retention = max(1, int(getattr(cfg.portfolio, "log_retention_days", 14) or 14))
+              removed = cleanup_old_logs(log_retention)
+              if removed:
+                logger.info("Автоочистка логов: удалено файлов %d (хранение %d дн.)", removed, log_retention)
+            except Exception as e:
+              logger.warning("Автоочистка логов: %s", e)
           if last_day_reset_date is None and day_start_equity is not None:
             last_day_reset_date = today
           interval_sched_due = ri_hours > 0 and (

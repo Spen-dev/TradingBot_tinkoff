@@ -7,7 +7,7 @@ from aiogram.filters import Command
 from aiogram.types import MenuButtonDefault, MenuButtonWebApp, WebAppInfo
 
 from .config import TelegramConfig
-from .telegram_utils import split_message
+from .telegram_utils import split_message, format_display_time
 
 _log = logging.getLogger(__name__)
 
@@ -36,10 +36,11 @@ def get_main_keyboard() -> types.ReplyKeyboardMarkup:
 
 
 class TelegramController:
-  def __init__(self, cfg: TelegramConfig):
+  def __init__(self, cfg: TelegramConfig, display_timezone: str = ""):
     self.bot = Bot(token=cfg.token)
     self.dp = Dispatcher()
     self.admin_chat_id = cfg.admin_chat_id
+    self._display_timezone = (display_timezone or "").strip()
     self._stop_event = asyncio.Event()
 
     self._on_start: Callable[[], Awaitable[None]] | None = None
@@ -431,9 +432,7 @@ class TelegramController:
     commission: float,
     simulation: bool = False,
   ) -> str:
-    from datetime import datetime
-    now = datetime.now()
-    time_str = now.strftime("%H:%M:%S")
+    time_str = format_display_time("%H:%M:%S", self._display_timezone)
     emoji = "🟢" if direction == "ПОКУПКА" else "🔴"
     # Важно: на этом этапе мы знаем только, что ордер успешно принят брокером.
     # Фактическое исполнение (полное/частичное) не проверяется.

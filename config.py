@@ -147,6 +147,7 @@ class PortfolioConfig:
   deepseek_history_days: int = 10  # дней истории (доходность, волатильность) в контексте для DeepSeek
   rebalance_decisions_log: bool = True  # писать в лог решения ребаланса (стратегия, сигнал, заявки)
   aggressive_rebalance: bool = False  # максимально агрессивный ребаланс по весам (ослабить фильтры по сигналам/отклонению)
+  log_retention_days: int = 14  # хранить ротированные bot.log.*; автоочистка раз в сутки
 
   def rebalance_day_minutes_window(self) -> tuple[int, int]:
     """Минуты суток [lo, hi] включительно, когда разрешён ребаланс.
@@ -294,6 +295,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     deepseek_history_days=p_raw.get("deepseek_history_days", 10),
     rebalance_decisions_log=p_raw.get("rebalance_decisions_log", True),
     aggressive_rebalance=p_raw.get("aggressive_rebalance", False),
+    log_retention_days=int(p_raw.get("log_retention_days", 14) or 14),
   )
   risk_raw = raw.get("risk", {})
   risk_raw.setdefault("pause_after_consecutive_losses", 0)

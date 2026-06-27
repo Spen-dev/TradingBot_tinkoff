@@ -1,7 +1,24 @@
 """Вспомогательные функции для Telegram-бота: форматирование чисел, разбивка длинных сообщений."""
 from __future__ import annotations
 
+from datetime import datetime
+
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
+DEFAULT_DISPLAY_TZ = "Europe/Moscow"
+
+
+def now_for_display(tz_name: str | None = None) -> datetime:
+  """Текущее время для сообщений пользователю (не UTC сервера в Docker)."""
+  tz = (tz_name or DEFAULT_DISPLAY_TZ).strip() or DEFAULT_DISPLAY_TZ
+  try:
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo(tz))
+  except Exception:
+    return datetime.now()
+
+
+def format_display_time(fmt: str = "%H:%M:%S", tz_name: str | None = None) -> str:
+  return now_for_display(tz_name).strftime(fmt)
 
 
 def format_money(value: float, currency: str = "₽") -> str:

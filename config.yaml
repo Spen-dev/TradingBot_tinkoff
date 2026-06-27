@@ -98,6 +98,7 @@ portfolio:
   deepseek_cache_hours: 2.0  # кэш рекомендаций DeepSeek (часы), 0 = не кэшировать
   deepseek_history_days: 10  # дней истории в контексте для DeepSeek (доходность, волатильность)
   rebalance_decisions_log: true  # писать в data/logs/rebalance_decisions.log решения ребаланса
+  log_retention_days: 14        # хранить ротированные bot.log.* (дней); автоочистка раз в сутки
   aggressive_rebalance: true
 
 risk:
