@@ -3,17 +3,32 @@ name: Deploy to VPS
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Check required secrets
+        run: |
+          missing=""
+          [ -z "${{ secrets.VPS_HOST }}" ] && missing="$missing VPS_HOST"
+          [ -z "${{ secrets.VPS_USER }}" ] && missing="$missing VPS_USER"
+          [ -z "${{ secrets.VPS_SSH_KEY }}" ] && missing="$missing VPS_SSH_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Не заданы GitHub Actions secrets:$missing"
+            echo "Локально: gh auth login, затем .\scripts\setup_github_secrets.ps1"
+            echo "Или вручную: Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 30m
           script: |
             set -e
             cd /opt/TradingBot_tinkoff
