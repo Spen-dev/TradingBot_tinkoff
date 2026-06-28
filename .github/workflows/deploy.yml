@@ -35,7 +35,8 @@ jobs:
             export COMPOSE_DOCKER_CLI_BUILD=1
             cd /opt/TradingBot_tinkoff
             PRE=$(git rev-parse HEAD)
-            git pull origin main
+            git fetch origin main
+            git reset --hard origin/main
             POST=$(git rev-parse HEAD)
 
             changed_files=""
