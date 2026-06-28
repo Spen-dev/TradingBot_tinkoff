@@ -61,22 +61,45 @@ def main() -> int:
 
   broker = None
   drift_note = ""
+  planned_orders = 0
+  trading_today = True
+  try:
+    from datetime import datetime
+
+    from zoneinfo import ZoneInfo
+
+    tz_name = (getattr(cfg.portfolio, "trading_timezone", None) or "").strip() or "Europe/Moscow"
+    today = datetime.now(ZoneInfo(tz_name)).date()
+    trading_today = cfg.portfolio.is_rebalance_trading_day(today)
+  except Exception:
+    pass
   try:
     from tinkoff_bot.broker import TinkoffBroker
+    from tinkoff_bot.portfolio import PortfolioManager
+    from tinkoff_bot.risk import RiskManager
 
     broker = TinkoffBroker(cfg.tinkoff)
     equity, cash, positions = broker.get_equity_snapshot(cfg.portfolio.base_currency)
+    pm = PortfolioManager(cfg.portfolio, instruments, broker, RiskManager(cfg.risk))
+    planned_orders = len(pm.build_rebalance_orders(equity))
     rows, max_dev = compute_portfolio_drift(
       equity, cash, instruments, positions,
       drift_pct=float(getattr(cfg.portfolio, "rebalance_drift_pct", 0.05) or 0.05),
     )
     print("\n=== Portfolio ===")
     print(f"equity={equity:.0f} cash={cash:.0f} positions={len(positions)} max_drift={max_dev:.1%}")
+    print(f"trading_day_today={trading_today} planned_orders={planned_orders}")
     if rows:
       for r in rows[:6]:
         print(f"  {r['ticker']}: {r['target_pct']:.1f}% -> {r['current_pct']:.1f}% ({r['dev_pct']:+.1f}%)")
     if len(positions) == 0 and equity > 1000 and max_dev >= 0.05:
-      drift_note = "WARN: цели есть, позиций нет — дождитесь ребаланса в торговый день"
+      if not trading_today and planned_orders > 0:
+        drift_note = (
+          f"OK: выходной MOEX — позиции появятся после ребаланса "
+          f"(запланировано {planned_orders} заявок)"
+        )
+      else:
+        drift_note = "WARN: цели есть, позиций нет — проверьте ребаланс и bot.log"
       print(f"\n{drift_note}")
   except Exception as e:
     print(f"\n=== Portfolio ===\nSKIP: {e}")
@@ -91,6 +114,8 @@ def main() -> int:
   )
   save_audit_report(ROOT, report)
   crit = [f for f in report.findings if f.severity == "critical"]
+  if not trading_today and planned_orders > 0:
+    crit = [f for f in crit if f.code not in ("DRIFT_NOT_HELD", "PORTFOLIO_ALL_CASH")]
   print("\n=== Audit (1d) ===")
   if crit:
     for f in crit:
@@ -98,11 +123,17 @@ def main() -> int:
   else:
     print("  no critical findings")
 
-  failed = (not ok_cfg) or api_code != 0 or bool(crit)
-  if drift_note:
+  lock_ok = lock_path.exists()
+  failed = (not ok_cfg) or api_code != 0 or bool(crit) or not lock_ok
+  if drift_note.startswith("WARN:"):
     failed = True
   print("\n=== Result ===")
-  print("NO-GO" if failed else "GO")
+  if not lock_ok:
+    print("NO-GO (нет observation_lock — prepare_observation_start.py)")
+  elif failed:
+    print("NO-GO")
+  else:
+    print("GO")
   return 1 if failed else 0
 
 
