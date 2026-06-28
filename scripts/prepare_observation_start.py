@@ -157,7 +157,11 @@ def main() -> int:
     except Exception as e:
       print(f"Не удалось сбросить risk_state: {e}")
 
-  lock = {"started_at": baseline["started_at"], "git_rev": baseline["git_rev"]}
+  lock = {
+    "started_at": baseline["started_at"],
+    "git_rev": baseline["git_rev"],
+    "audit_days": 3,
+  }
   LOCK_FILE.write_text(json.dumps(lock, ensure_ascii=False, indent=2), encoding="utf-8")
   print(f"Lock: {LOCK_FILE}")
   return 0

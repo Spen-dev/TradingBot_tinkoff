@@ -44,6 +44,17 @@
 | 13 | `bot.log` | `ERROR`, `config_error`, watchdog restart |
 | 14 | `rebalance_decisions.log` | Решения buy/sell/hold осмысленны; нет циклов «купил-продал» каждый день без дрейфа |
 | 15 | `data/dynamic_portfolio.json` | `advisor_source`: macro / moex / finam; дата `updated_at` свежая |
+| 16 | `data/bug_audit/latest.json` | После `prepare_observation_start.py`: ежедневный аудит 3 дн., финал на 3-й день |
+
+### Трёхдневный аудит (после старта наблюдения)
+
+```bash
+python scripts/prepare_observation_start.py          # lock + baseline + audit_days=3
+python scripts/audit_3day.py --live --save           # вручную в любой момент
+```
+
+Авто: **19:00** ( `ops.bug_audit_time` ) — отчёт в Telegram, если есть `data/observation_lock.json`.  
+Проверяет: ERROR в логах, watchdog, «ребаланс без заявок при дрейфе», портфель в кеше, блокировки торговли, fallback dynamic portfolio.
 
 ---
 

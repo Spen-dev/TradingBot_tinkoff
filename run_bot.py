@@ -870,6 +870,7 @@ async def main() -> None:
     last_macro_news_check: datetime | None = None
     last_macro_index_trigger_date: date | None = None
     last_sandbox_topup_date: date | None = None
+    last_bug_audit_date: date | None = None
     macro_news_cfg = getattr(cfg, "macro_news", None)
     alert_live_ping_hours = getattr(cfg.portfolio, "alert_live_ping_hours", 0.0) or 0.0
     weekly_weekday = getattr(cfg.portfolio, "weekly_report_weekday", 6) or 6
@@ -1029,6 +1030,62 @@ async def main() -> None:
                 logger.info("learned_params backup: %s", path)
             except Exception as e:
               logger.warning("learned_params backup: %s", e)
+
+        if scheduler_ok and ops_cfg and getattr(ops_cfg, "bug_audit_enabled", False):
+          from tinkoff_bot.bug_audit import observation_audit_due
+
+          bug_audit_time = getattr(ops_cfg, "bug_audit_time", "19:00") or "19:00"
+          try:
+            bparts = [p for p in str(bug_audit_time).strip().split(":") if p.strip() != ""]
+            bug_h, bug_m = int(bparts[0]), int(bparts[1])
+          except (ValueError, AttributeError, IndexError):
+            bug_h, bug_m = 19, 0
+          bug_slot = bug_h * 60 + bug_m
+          audit_days_cfg = int(getattr(ops_cfg, "bug_audit_days", 3) or 3)
+          audit_active, audit_days, obs_started = observation_audit_due(
+            base_dir, audit_days=audit_days_cfg,
+          )
+          if audit_active and last_bug_audit_date != today and now_slot >= bug_slot:
+            last_bug_audit_date = today
+            try:
+              from tinkoff_bot.bug_audit import (
+                format_audit_report,
+                observation_final_audit_due,
+                run_bug_audit,
+                save_audit_report,
+              )
+
+              drift_pct = float(getattr(cfg.portfolio, "rebalance_drift_pct", 0.05) or 0.05)
+              loop = asyncio.get_running_loop()
+              report = await loop.run_in_executor(
+                None,
+                lambda: run_bug_audit(
+                  base_dir,
+                  days=audit_days,
+                  drift_pct=drift_pct,
+                  broker=broker,
+                  instruments=cfg.instruments,
+                  currency=cfg.portfolio.base_currency,
+                ),
+              )
+              save_audit_report(base_dir, report)
+              day_num = (today - obs_started.date()).days + 1 if obs_started else 1
+              is_final = observation_final_audit_due(
+                base_dir, audit_days=audit_days, now=wnow,
+              )
+              title = (
+                f"Финальный аудит ({audit_days} дн.)"
+                if is_final
+                else f"Ежедневный аудит (день {day_num}/{audit_days})"
+              )
+              await send_alert(
+                tg,
+                format_audit_report(report, title=title),
+                "bug_audit_final" if is_final else "bug_audit_daily",
+                force=True,
+              )
+            except Exception as e:
+              logger.warning("bug_audit: %s", e)
 
         if (
           scheduler_ok

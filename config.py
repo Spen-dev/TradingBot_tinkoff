@@ -101,6 +101,9 @@ class OpsConfig:
   learned_params_backup_interval_hours: float = 24.0
   sandbox_auto_topup: bool = True
   watchdog_exit_after_failures: int = 3
+  bug_audit_enabled: bool = True
+  bug_audit_days: int = 3
+  bug_audit_time: str = "19:00"
 
 
 @dataclass
@@ -476,6 +479,9 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     learned_params_backup_interval_hours=float(op_raw.get("learned_params_backup_interval_hours", 24.0) or 24.0),
     sandbox_auto_topup=bool(op_raw.get("sandbox_auto_topup", True)),
     watchdog_exit_after_failures=int(op_raw.get("watchdog_exit_after_failures", 3) or 3),
+    bug_audit_enabled=bool(op_raw.get("bug_audit_enabled", True)),
+    bug_audit_days=int(op_raw.get("bug_audit_days", 3) or 3),
+    bug_audit_time=str(op_raw.get("bug_audit_time", "19:00") or "19:00"),
   )
 
   return AppConfig(
