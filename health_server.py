@@ -15,6 +15,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Таймаут broker-вызовов в health-эндпоинтах: короче рабочего, чтобы polling дашборда не вис.
+_HEALTH_BROKER_TIMEOUT_S = 5.0
+
+
+async def _broker_call_async(fn, *, timeout: float = _HEALTH_BROKER_TIMEOUT_S):
+  """Выполнить sync broker-вызов в executor с таймаутом — не блокировать общий event loop."""
+  loop = asyncio.get_running_loop()
+  return await asyncio.wait_for(loop.run_in_executor(None, fn), timeout=timeout)
+
 
 def _dashboard_token_required() -> str:
   return os.environ.get("DASHBOARD_TOKEN", "").strip()
@@ -488,7 +497,9 @@ async def _handle_api_status(
       updated_at = str(snap.get("updated_at", updated_at))
     elif broker and cfg:
       try:
-        equity, cash, positions = broker.get_equity_snapshot(cfg.portfolio.base_currency)
+        equity, cash, positions = await _broker_call_async(
+          lambda: broker.get_equity_snapshot(cfg.portfolio.base_currency)
+        )
         positions_count = len(positions)
         daily_pnl, drawdown_pct = _daily_pnl_and_drawdown_from_history(equity, cfg)
         rm = RiskManager(cfg.risk)
@@ -561,7 +572,9 @@ async def _handle_api_portfolio(broker: "TinkoffBroker | None", cfg: "AppConfig 
   if not broker or not cfg:
     return {"instruments": instruments}
   try:
-    _, _, positions = broker.get_equity_snapshot(cfg.portfolio.base_currency)
+    _, _, positions = await _broker_call_async(
+      lambda: broker.get_equity_snapshot(cfg.portfolio.base_currency)
+    )
     by_figi = {i.figi: i for i in cfg.instruments}
     learned = load_learned_params()
     seen: set[str] = set()
@@ -676,7 +689,9 @@ async def handle_health(
       broker_ok = False
       if broker:
         try:
-          broker.get_cash_balance(currency=(cfg.portfolio.base_currency if cfg else "RUB"))
+          await _broker_call_async(
+            lambda: broker.get_cash_balance(currency=(cfg.portfolio.base_currency if cfg else "RUB"))
+          )
           broker_ok = True
         except Exception:
           pass

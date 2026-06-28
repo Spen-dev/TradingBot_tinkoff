@@ -101,6 +101,106 @@ def test_load_config_minimal():
         Path(path).unlink(missing_ok=True)
 
 
+@patch("tinkoff_bot.learned_params.load_learned_params", return_value={})
+def test_validate_config_rejects_percent_risk_fractions(mock_load):
+    class T:
+        token = "tok"
+        account_id = "00000000-0000-0000-0000-000000000001"
+        use_sandbox = True
+
+    class Tel:
+        token = "tg"
+        admin_chat_id = 1
+
+    class Cfg:
+        instruments = []
+        mode = "sandbox"
+        tinkoff = T()
+        telegram = Tel()
+        risk = RiskConfig(
+            max_drawdown=15.0, daily_loss_limit=3.0, default_stop_loss_pct=0.05,
+            trailing_stop_pct=0.02, var_confidence=0.95, kelly_fraction_cap=0.5,
+        )
+        portfolio = PortfolioConfig(
+            base_currency="RUB", rebalance_frequency="daily",
+            rebalance_time="10:00", commission_rate=0.0003,
+        )
+
+    ok, errs = validate_config(Cfg())
+    assert ok is False
+    assert any("max_drawdown" in e for e in errs)
+    assert any("daily_loss_limit" in e for e in errs)
+
+
+@patch("tinkoff_bot.learned_params.load_learned_params", return_value={})
+def test_validate_config_rejects_invalid_timezone(mock_load):
+    class T:
+        token = "tok"
+        account_id = "00000000-0000-0000-0000-000000000001"
+        use_sandbox = True
+
+    class Tel:
+        token = "tg"
+        admin_chat_id = 1
+
+    class Cfg:
+        instruments = []
+        mode = "sandbox"
+        tinkoff = T()
+        telegram = Tel()
+        risk = RiskConfig(
+            max_drawdown=0.15, daily_loss_limit=0.03, default_stop_loss_pct=0.05,
+            trailing_stop_pct=0.02, var_confidence=0.95, kelly_fraction_cap=0.5,
+        )
+        portfolio = PortfolioConfig(
+            base_currency="RUB", rebalance_frequency="daily",
+            rebalance_time="10:00", commission_rate=0.0003,
+            trading_timezone="Europe/Moscov",
+        )
+
+    ok, errs = validate_config(Cfg())
+    assert ok is False
+    assert any("trading_timezone" in e for e in errs)
+
+
+@patch("tinkoff_bot.learned_params.load_learned_params", return_value={})
+def test_validate_config_accepts_valid_timezone_and_fractions(mock_load):
+    class T:
+        token = "tok"
+        account_id = "00000000-0000-0000-0000-000000000001"
+        use_sandbox = True
+
+    class Tel:
+        token = "tg"
+        admin_chat_id = 1
+
+    class Inst:
+        figi = "BBG000"
+        ticker = "X"
+        strategy = "momentum"
+        target_weight = 1.0
+        strategy_params = {}
+        lot = 1
+
+    class Cfg:
+        instruments = [Inst()]
+        mode = "sandbox"
+        tinkoff = T()
+        telegram = Tel()
+        risk = RiskConfig(
+            max_drawdown=0.15, daily_loss_limit=0.03, default_stop_loss_pct=0.05,
+            trailing_stop_pct=0.02, var_confidence=0.95, kelly_fraction_cap=0.5,
+        )
+        portfolio = PortfolioConfig(
+            base_currency="RUB", rebalance_frequency="daily",
+            rebalance_time="10:00", commission_rate=0.0003,
+            trading_timezone="Europe/Moscow",
+        )
+
+    ok, errs = validate_config(Cfg())
+    assert ok is True, errs
+
+
 def test_is_rebalance_trading_day():
     from datetime import date
 

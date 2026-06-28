@@ -533,6 +533,30 @@ def validate_config(cfg: "AppConfig") -> tuple[bool, list[str]]:
       norm = normalize_strategy_name(strat)
       if strat is not None and norm not in VALID_STRATEGIES:
         errors.append(f"Неизвестная стратегия для {getattr(i, 'ticker', '')}: {strat}")
+  # Риск-доли должны быть в долях (0..1], а не процентами (15 вместо 0.15) —
+  # иначе защита от просадки/дневного убытка фактически не сработает.
+  risk = getattr(cfg, "risk", None)
+  if risk is not None:
+    for field, label in (
+      ("max_drawdown", "max_drawdown"),
+      ("daily_loss_limit", "daily_loss_limit"),
+      ("default_stop_loss_pct", "default_stop_loss_pct"),
+      ("trailing_stop_pct", "trailing_stop_pct"),
+    ):
+      val = getattr(risk, field, None)
+      if val is not None and val > 1.0:
+        errors.append(f"risk.{label}={val}: должно быть в долях (например 0.15, а не {val:g})")
+
+  # Таймзона торгового окна должна быть валидной IANA-зоной, иначе расписание молча уедет на время сервера.
+  portfolio = getattr(cfg, "portfolio", None)
+  tz_name = (getattr(portfolio, "trading_timezone", None) or "").strip() if portfolio is not None else ""
+  if tz_name:
+    try:
+      from zoneinfo import ZoneInfo
+      ZoneInfo(tz_name)
+    except Exception:
+      errors.append(f"portfolio.trading_timezone='{tz_name}': неизвестная таймзона (например Europe/Moscow)")
+
   try:
     from .learned_params import load_learned_params
     data = load_learned_params()
