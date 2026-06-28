@@ -76,5 +76,6 @@ jobs:
             docker compose restart bot
             sleep 20
             docker compose exec -T bot python scripts/prepare_observation_start.py --update-baseline-only || true
+            docker compose exec -T bot python scripts/preflight_run.py || true
             docker compose ps
             curl -sf http://127.0.0.1:8000/health || true

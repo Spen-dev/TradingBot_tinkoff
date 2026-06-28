@@ -1543,16 +1543,22 @@ async def main() -> None:
             except Exception as e:
               logger.exception("Periodic strategy selection: %s", e)
 
-        if no_trades_hours > 0 and trading_enabled and last_trade_time is not None:
-          if (now - last_trade_time).total_seconds() >= no_trades_hours * 3600:
-            if no_trades_alert_for_last_trade_ts != last_trade_time:
-              no_trades_alert_for_last_trade_ts = last_trade_time
-              await send_alert(
-                tg,
-                f"⚠️ Нет сделок более {no_trades_hours} ч. Проверьте логи и доступ к брокеру.",
-                "no_trades",
-                force=True,
-              )
+        if no_trades_hours > 0:
+          from tinkoff_bot.ops_automation import no_trades_alert_payload
+
+          robot_active = bool(started) or bool(getattr(cfg.portfolio, "auto_rebalance_when_stopped", False))
+          send_no_trades, alert_key, no_trades_msg = no_trades_alert_payload(
+            now,
+            no_trades_hours=float(no_trades_hours),
+            last_trade_time=last_trade_time,
+            robot_started_at=robot_started_at,
+            robot_active=robot_active,
+            trading_enabled=trading_enabled,
+            already_alerted_for=no_trades_alert_for_last_trade_ts,
+          )
+          if send_no_trades:
+            no_trades_alert_for_last_trade_ts = alert_key
+            await send_alert(tg, no_trades_msg, "no_trades", force=True)
 
         # Пауза по убыткам — только при активной торговле (не при «Стоп», даже с auto_rebalance_when_stopped).
         if inst_pause_after > 0 and started:

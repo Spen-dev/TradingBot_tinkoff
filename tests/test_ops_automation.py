@@ -50,6 +50,58 @@ def test_backup_learned_params(tmp_path: Path):
   assert json.loads(Path(out).read_text(encoding="utf-8")) == {"x": 1}
 
 
+def test_no_trades_alert_never_traded():
+  from datetime import datetime, timedelta
+  from tinkoff_bot.ops_automation import no_trades_alert_payload
+
+  started = datetime(2026, 6, 1, 10, 0, 0)
+  now = started + timedelta(hours=80)
+  send, key, msg = no_trades_alert_payload(
+    now,
+    no_trades_hours=72,
+    last_trade_time=None,
+    robot_started_at=started,
+    robot_active=True,
+    trading_enabled=True,
+    already_alerted_for=None,
+  )
+  assert send is True
+  assert key == started
+  assert "Ни одной сделки" in msg
+
+  send2, _, _ = no_trades_alert_payload(
+    now,
+    no_trades_hours=72,
+    last_trade_time=None,
+    robot_started_at=started,
+    robot_active=True,
+    trading_enabled=True,
+    already_alerted_for=started,
+  )
+  assert send2 is False
+
+
+def test_no_trades_alert_after_last_trade():
+  from datetime import datetime, timedelta
+  from tinkoff_bot.ops_automation import no_trades_alert_payload
+
+  last = datetime(2026, 6, 1, 10, 0, 0)
+  started = datetime(2026, 5, 1, 10, 0, 0)
+  now = last + timedelta(hours=80)
+  send, key, msg = no_trades_alert_payload(
+    now,
+    no_trades_hours=72,
+    last_trade_time=last,
+    robot_started_at=started,
+    robot_active=True,
+    trading_enabled=True,
+    already_alerted_for=None,
+  )
+  assert send is True
+  assert key == last
+  assert "Нет сделок" in msg
+
+
 def test_ensure_sandbox_funded_tops_up_delta_not_full_target(monkeypatch):
   from unittest.mock import MagicMock
   from tinkoff_bot.ops_automation import ensure_sandbox_funded

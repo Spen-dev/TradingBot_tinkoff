@@ -122,6 +122,36 @@ def backup_learned_params(base_dir: Path) -> Optional[str]:
   return str(dest)
 
 
+def no_trades_alert_payload(
+  now: datetime,
+  *,
+  no_trades_hours: float,
+  last_trade_time: Optional[datetime],
+  robot_started_at: datetime,
+  robot_active: bool,
+  trading_enabled: bool,
+  already_alerted_for: Optional[datetime],
+) -> tuple[bool, Optional[datetime], str]:
+  """Нужен ли алерт «нет сделок» (в т.ч. если сделок не было вообще с запуска)."""
+  if no_trades_hours <= 0 or not trading_enabled or not robot_active:
+    return False, already_alerted_for, ""
+  reference = last_trade_time if last_trade_time is not None else robot_started_at
+  if (now - reference).total_seconds() < no_trades_hours * 3600:
+    return False, already_alerted_for, ""
+  alert_key = last_trade_time if last_trade_time is not None else robot_started_at
+  if already_alerted_for == alert_key:
+    return False, already_alerted_for, ""
+  hours = int(no_trades_hours)
+  if last_trade_time is None:
+    msg = (
+      f"⚠️ Ни одной сделки с запуска более {hours} ч. "
+      "Проверьте /portfolio, rebalance_decisions.log и bot.log."
+    )
+  else:
+    msg = f"⚠️ Нет сделок более {hours} ч. Проверьте логи и доступ к брокеру."
+  return True, alert_key, msg
+
+
 def ensure_sandbox_funded(broker: Any, currency: str = "RUB") -> Optional[str]:
   """Пополнить песочницу до SANDBOX_TARGET_CASH, если баланс сильно ниже."""
   target = float(os.getenv("SANDBOX_TARGET_CASH", "100000") or 0)
