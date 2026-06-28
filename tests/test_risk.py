@@ -84,3 +84,23 @@ def test_risk_state_persisted(tmp_path, monkeypatch, risk_cfg):
     rm2 = RiskManager(risk_cfg)
     assert rm2._max_equity_seen == 120_000.0
     assert rm2._daily_equity_start == 120_000.0
+
+
+def test_daily_baseline_reset_on_stale_date(tmp_path, monkeypatch, risk_cfg):
+    import json
+    state_file = tmp_path / "risk_state.json"
+    state_file.write_text(json.dumps({
+        "pause_until": None,
+        "max_equity_seen": 150_000.0,
+        "daily_equity_start": 150_000.0,
+        "daily_equity_date": "2020-01-01",
+    }), encoding="utf-8")
+    monkeypatch.setattr("tinkoff_bot.risk.RISK_STATE_FILE", state_file)
+    rm = RiskManager(risk_cfg)
+    # Дневной базис устарел (другая дата) — сбрасывается, max_equity_seen сохраняется.
+    assert rm._daily_equity_start is None
+    assert rm._max_equity_seen == 150_000.0
+    # Первый update задаёт свежий дневной базис от текущего equity.
+    st = rm.update_equity(100_000.0, 100_000.0)
+    assert rm._daily_equity_start == 100_000.0
+    assert st.daily_pnl == 0.0

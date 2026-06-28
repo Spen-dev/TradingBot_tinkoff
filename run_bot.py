@@ -142,8 +142,10 @@ async def main() -> None:
       logger.exception("dynamic_portfolio: %s", e)
       return f"Ошибка обновления состава: {e}"
     if instruments:
-      cfg.instruments = instruments
-      pm.update_instruments(instruments)
+      # Меняем состав под тем же локом, что и ребаланс — иначе заявки могут уйти по уже устаревшему составу.
+      async with rebalance_lock:
+        cfg.instruments = instruments
+        pm.update_instruments(instruments)
       if changed:
         logger.info("dynamic_portfolio обновлён: %s", msg)
         if notify:
@@ -478,7 +480,7 @@ async def main() -> None:
         try:
           from tinkoff_bot.trade_history import get_consecutive_losses
           min_pnl = getattr(cfg.risk, "min_pnl_to_count_loss_rub", 0.0) or 0.0
-          consecutive = get_consecutive_losses(broker.get_last_price, horizon_days=0, min_pnl_rub=min_pnl)
+          consecutive = get_consecutive_losses(broker.get_last_price, horizon_days=1, min_pnl_rub=min_pnl)
           pause_set = pm.risk.update_consecutive_losses(consecutive)
           if pause_set:
             ph = getattr(cfg.risk, "pause_hours", 24) or 24
@@ -505,14 +507,12 @@ async def main() -> None:
           npos,
         )
         loop = asyncio.get_running_loop()
-        po = planned_orders
         trades = await loop.run_in_executor(
           None,
           lambda po=planned_orders: pm.execute_rebalance(day_start_equity or 0, po),
         )
         logger.info("Ребаланс (%s): исполнение завершено, заявок=%d", source, len(trades) if trades else 0)
         if trades:
-          dry_run = getattr(cfg.portfolio, "dry_run", False)
           last_trade_time = datetime.now()
           inc_trades(len(trades))
           for idx, t in enumerate(trades):
@@ -580,7 +580,7 @@ async def main() -> None:
       consecutive = 0
       try:
         min_pnl = getattr(cfg.risk, "min_pnl_to_count_loss_rub", 0.0) or 0.0
-        consecutive = get_consecutive_losses(broker.get_last_price, horizon_days=10, min_pnl_rub=min_pnl)
+        consecutive = get_consecutive_losses(broker.get_last_price, horizon_days=1, min_pnl_rub=min_pnl)
       except Exception:
         pass
       risk_penalty_mult = 1.0 + (0.5 * min(consecutive, 5) / 5.0)  # до 1.5 при серии убытков
@@ -1495,7 +1495,7 @@ async def main() -> None:
             from tinkoff_bot.trade_history import get_consecutive_losses_per_figi
             from tinkoff_bot.instrument_pause import update_pauses
             min_pnl = getattr(cfg.risk, "min_pnl_to_count_loss_rub", 0.0) or 0.0
-            consec = get_consecutive_losses_per_figi(broker.get_last_price, horizon_days=10, min_pnl_rub=min_pnl)
+            consec = get_consecutive_losses_per_figi(broker.get_last_price, horizon_days=1, min_pnl_rub=min_pnl)
             paused_figi = update_pauses(consec, inst_pause_after, inst_pause_hours)
             if paused_figi:
               figi_to_ticker = {i.figi: i.ticker for i in cfg.instruments}
@@ -1519,7 +1519,7 @@ async def main() -> None:
               consecutive = 0
               try:
                 min_pnl = getattr(cfg.risk, "min_pnl_to_count_loss_rub", 0.0) or 0.0
-                consecutive = get_consecutive_losses(broker.get_last_price, horizon_days=10, min_pnl_rub=min_pnl)
+                consecutive = get_consecutive_losses(broker.get_last_price, horizon_days=1, min_pnl_rub=min_pnl)
               except Exception:
                 pass
               risk_penalty_mult = 1.0 + (0.5 * min(consecutive, 5) / 5.0)

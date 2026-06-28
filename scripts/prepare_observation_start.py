@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
 LOCK_FILE = ROOT / "data" / "observation_lock.json"
 BASELINE_FILE = ROOT / "data" / "observation_baseline.json"
 LEARNED_FILE = ROOT / "learned_params" / "params.json"
+RISK_STATE_FILE = ROOT / "data" / "risk_state.json"
 BACKUP_DIR = ROOT / "data" / "backups"
 
 
@@ -129,6 +130,15 @@ def main() -> int:
     BASELINE_FILE.write_text(json.dumps(baseline, ensure_ascii=False, indent=2), encoding="utf-8")
     print("Baseline обновлён (--update-baseline-only), lock и equity старта сохранены.")
     return 0
+
+  # Свежий старт наблюдения: сбрасываем risk_state, иначе старый пик equity
+  # даст ложную «просадку» и заблокирует торговлю на новом базисе.
+  if RISK_STATE_FILE.exists():
+    try:
+      RISK_STATE_FILE.unlink()
+      print(f"risk_state сброшен: {RISK_STATE_FILE}")
+    except Exception as e:
+      print(f"Не удалось сбросить risk_state: {e}")
 
   lock = {"started_at": baseline["started_at"], "git_rev": baseline["git_rev"]}
   LOCK_FILE.write_text(json.dumps(lock, ensure_ascii=False, indent=2), encoding="utf-8")

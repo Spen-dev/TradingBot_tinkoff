@@ -34,6 +34,7 @@ def _save_risk_state(
   pause_until: datetime | None,
   max_equity_seen: float,
   daily_equity_start: float | None,
+  daily_equity_date: str | None,
 ) -> None:
   RISK_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
   import json
@@ -41,6 +42,7 @@ def _save_risk_state(
     "pause_until": pause_until.isoformat() if pause_until else None,
     "max_equity_seen": max_equity_seen,
     "daily_equity_start": daily_equity_start,
+    "daily_equity_date": daily_equity_date,
   }
   RISK_STATE_FILE.write_text(json.dumps(data), encoding="utf-8")
 
@@ -50,8 +52,15 @@ class RiskManager:
     self.cfg = cfg
     data = _load_risk_state()
     self._max_equity_seen = float(data.get("max_equity_seen") or 0.0)
+    today = datetime.now().strftime("%Y-%m-%d")
+    self._daily_equity_date = data.get("daily_equity_date")
     des = data.get("daily_equity_start")
-    self._daily_equity_start = float(des) if des is not None else None
+    # Дневной базис восстанавливаем только если он от сегодняшней даты, иначе сбросим при первом update_equity.
+    if des is not None and self._daily_equity_date == today:
+      self._daily_equity_start = float(des)
+    else:
+      self._daily_equity_start = None
+      self._daily_equity_date = None
     self._pause_until = None
     pause_s = data.get("pause_until")
     if pause_s:
@@ -61,7 +70,7 @@ class RiskManager:
         self._pause_until = None
 
   def _persist(self) -> None:
-    _save_risk_state(self._pause_until, self._max_equity_seen, self._daily_equity_start)
+    _save_risk_state(self._pause_until, self._max_equity_seen, self._daily_equity_start, self._daily_equity_date)
 
   def update_equity(self, equity: float, day_start_equity: float) -> RiskState:
     if self._max_equity_seen == 0.0:
@@ -69,6 +78,7 @@ class RiskManager:
     self._max_equity_seen = max(self._max_equity_seen, equity)
     if self._daily_equity_start is None:
       self._daily_equity_start = day_start_equity
+      self._daily_equity_date = datetime.now().strftime("%Y-%m-%d")
     daily_pnl = equity - self._daily_equity_start
     self._persist()
     return RiskState(equity=equity, max_equity_seen=self._max_equity_seen, daily_pnl=daily_pnl)
@@ -76,6 +86,7 @@ class RiskManager:
   def reset_daily(self, new_day_start: float) -> None:
     """Сброс дневного старта (например в полночь)."""
     self._daily_equity_start = new_day_start
+    self._daily_equity_date = datetime.now().strftime("%Y-%m-%d")
     self._persist()
 
   def reset_equity_baseline(self, equity: float) -> None:
@@ -85,6 +96,7 @@ class RiskManager:
     """
     self._max_equity_seen = equity
     self._daily_equity_start = equity
+    self._daily_equity_date = datetime.now().strftime("%Y-%m-%d")
     self._persist()
 
   def set_pause_until(self, hours: float) -> None:
