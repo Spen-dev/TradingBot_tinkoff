@@ -553,16 +553,20 @@ async def main() -> None:
       from tinkoff_bot.self_learn import run_strategy_selection, strategy_selection_llm_kwargs
       days = getattr(cfg.portfolio, "strategy_selection_days", 90) or 90
       comm = getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003
-      msg, changes = run_strategy_selection(
-        broker, cfg.instruments, days=days,
-        commission_rate=comm,
-        train_ratio=getattr(cfg.portfolio, "self_learn_train_ratio", 0.7) or 0.7,
-        use_sharpe=getattr(cfg.portfolio, "self_learn_use_sharpe", True),
-        min_trades=getattr(cfg.portfolio, "self_learn_min_trades", 5) or 5,
-        risk_penalty=getattr(cfg.portfolio, "self_learn_risk_penalty", 0.5) or 0.5,
-        strategy_change_min_delta=getattr(cfg.portfolio, "strategy_change_min_delta", 0.05) or 0,
-        strategy_diversity_max_share=getattr(cfg.portfolio, "strategy_diversity_max_share", 0) or 0,
-        **strategy_selection_llm_kwargs(cfg),
+      loop = asyncio.get_running_loop()
+      msg, changes = await loop.run_in_executor(
+        None,
+        lambda: run_strategy_selection(
+          broker, cfg.instruments, days=days,
+          commission_rate=comm,
+          train_ratio=getattr(cfg.portfolio, "self_learn_train_ratio", 0.7) or 0.7,
+          use_sharpe=getattr(cfg.portfolio, "self_learn_use_sharpe", True),
+          min_trades=getattr(cfg.portfolio, "self_learn_min_trades", 5) or 5,
+          risk_penalty=getattr(cfg.portfolio, "self_learn_risk_penalty", 0.5) or 0.5,
+          strategy_change_min_delta=getattr(cfg.portfolio, "strategy_change_min_delta", 0.05) or 0,
+          strategy_diversity_max_share=getattr(cfg.portfolio, "strategy_diversity_max_share", 0) or 0,
+          **strategy_selection_llm_kwargs(cfg),
+        ),
       )
       if changes:
         await send_alert(tg, "📊 Смена стратегий: " + ", ".join(f"{t} {o}→{n}" for t, o, n in changes), "strategy_changes", force=True)
@@ -584,19 +588,23 @@ async def main() -> None:
       except Exception:
         pass
       risk_penalty_mult = 1.0 + (0.5 * min(consecutive, 5) / 5.0)  # до 1.5 при серии убытков
-      return run_retrain(
-        broker, cfg.instruments, days=days,
-        commission_rate=getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003,
-        train_ratio=getattr(cfg.portfolio, "self_learn_train_ratio", 0.7) or 0.7,
-        use_sharpe=getattr(cfg.portfolio, "self_learn_use_sharpe", True),
-        min_trades=getattr(cfg.portfolio, "self_learn_min_trades", 5) or 5,
-        risk_penalty=getattr(cfg.portfolio, "self_learn_risk_penalty", 0.5) or 0.5,
-        risk_penalty_mult=risk_penalty_mult,
-        optuna_trials=getattr(cfg.portfolio, "self_learn_optuna_trials", 0) or 0,
-        optimize_weights=getattr(cfg.portfolio, "self_learn_optimize_weights", False),
-        weight_cap=getattr(cfg.portfolio, "self_learn_weight_cap", 0.4) or 0.4,
-        atr_period=getattr(cfg.portfolio, "volatility_atr_period", 14) or 14,
-        tune_by_regime=getattr(cfg.portfolio, "self_learn_tune_by_regime", False),
+      loop = asyncio.get_running_loop()
+      return await loop.run_in_executor(
+        None,
+        lambda: run_retrain(
+          broker, cfg.instruments, days=days,
+          commission_rate=getattr(cfg.portfolio, "commission_rate", 0.0003) or 0.0003,
+          train_ratio=getattr(cfg.portfolio, "self_learn_train_ratio", 0.7) or 0.7,
+          use_sharpe=getattr(cfg.portfolio, "self_learn_use_sharpe", True),
+          min_trades=getattr(cfg.portfolio, "self_learn_min_trades", 5) or 5,
+          risk_penalty=getattr(cfg.portfolio, "self_learn_risk_penalty", 0.5) or 0.5,
+          risk_penalty_mult=risk_penalty_mult,
+          optuna_trials=getattr(cfg.portfolio, "self_learn_optuna_trials", 0) or 0,
+          optimize_weights=getattr(cfg.portfolio, "self_learn_optimize_weights", False),
+          weight_cap=getattr(cfg.portfolio, "self_learn_weight_cap", 0.4) or 0.4,
+          atr_period=getattr(cfg.portfolio, "volatility_atr_period", 14) or 14,
+          tune_by_regime=getattr(cfg.portfolio, "self_learn_tune_by_regime", False),
+        ),
       )
     except Exception as e:
       inc_error()

@@ -18,6 +18,9 @@ from .learned_params import load_learned_params, get_effective_params, get_effec
 
 logger = logging.getLogger(__name__)
 
+# Резерв кэша при планировании и исполнении покупок (одинаково в build и execute).
+_CASH_SAFETY = 0.75
+
 _BASE_DIR = Path(__file__).resolve().parent
 _DATA_DIR = _BASE_DIR / "data"
 LAST_TRADES_FILE = _DATA_DIR / "last_trades.json"
@@ -474,7 +477,7 @@ class PortfolioManager:
     pending_buys: List[RebalanceOrder] = []
     sells: List[RebalanceOrder] = []
     remaining_cash = cash
-    SAFETY = 0.75
+    SAFETY = _CASH_SAFETY
     now = datetime.now()
     last_trades = _load_last_trades()
     learned = load_learned_params()
@@ -777,7 +780,7 @@ class PortfolioManager:
       if o.direction == OrderDirection.ORDER_DIRECTION_BUY:
         lot = getattr(self.instruments_cfg.get(o.figi), "lot", 1) or 1
         price = o.execution_price
-        max_qty = int(math.floor(available_cash * 0.95 / price / lot)) * lot
+        max_qty = int(math.floor(available_cash * _CASH_SAFETY / price / lot)) * lot
         if max_qty < lot:
           logger.warning("Пропуск заявки %s: недостаточно кэша (доступно %.2f %s, минимум на 1 лот ≈ %.2f)", o.ticker, available_cash, base_currency, price * lot)
           continue
@@ -895,11 +898,13 @@ class PortfolioManager:
             )
             order_id = None
             break
-          logger.warning("place_order %s попытка %d/3: %s", o.ticker, attempt + 1, e)
-          if attempt == 2:
-            raise
-          import time
-          time.sleep(2 * (attempt + 1))
+          logger.warning(
+            "place_order %s: %s (повтор отменён — риск дубликата после таймаута брокера)",
+            o.ticker,
+            e,
+          )
+          order_id = None
+          break
       if order_id is None or executed_qty <= 0:
         continue
       if is_buy:
