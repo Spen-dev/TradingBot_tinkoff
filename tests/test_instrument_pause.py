@@ -37,6 +37,13 @@ def test_update_pauses_repairs_bad_until_without_alert(pause_file):
   assert ip._parse_until(data[figi]) > datetime.now()
 
 
+def test_is_paused_respects_timezone_aware_until(pause_file):
+  figi = "F1"
+  future = (datetime.now() + timedelta(hours=2)).isoformat()
+  pause_file.write_text(json.dumps({figi: future}), encoding="utf-8")
+  assert ip.is_paused(figi) is True
+
+
 def test_update_pauses_re_alerts_after_expiry(pause_file):
   figi = "BBG004730RP0"
   past = (datetime.now() - timedelta(hours=1)).isoformat()

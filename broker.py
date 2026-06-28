@@ -67,7 +67,9 @@ def _with_broker_retry(fn: Callable[[], T], *, label: str = "broker") -> T:
   raise last
 
 
-def _quotation_to_float(q: Quotation) -> float:
+def _quotation_to_float(q: Quotation | None) -> float:
+  if q is None:
+    return 0.0
   return q.units + q.nano / 1e9
 
 
@@ -212,6 +214,8 @@ class TinkoffBroker:
           "volume": c.volume,
         }
       )
+    if not rows:
+      return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
     return pd.DataFrame(rows).set_index("time")
 
   def place_order(

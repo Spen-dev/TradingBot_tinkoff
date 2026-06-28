@@ -27,10 +27,10 @@ def is_paused(figi: str) -> bool:
   until = _load().get(figi)
   if not until:
     return False
-  try:
-    return datetime.now() < datetime.fromisoformat(until)
-  except Exception:
+  until_dt = _parse_until(until)
+  if until_dt is None:
     return False
+  return datetime.now() < until_dt
 
 
 def set_pause(figi: str, until_iso: str) -> None:

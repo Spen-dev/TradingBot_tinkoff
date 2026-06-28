@@ -32,6 +32,21 @@ def _git_rev() -> str:
     return ""
 
 
+def _sync_risk_state_to_equity(equity: float) -> None:
+  """Синхронизировать max_equity/daily baseline с equity наблюдения (deploy без полного reset)."""
+  data: dict = {}
+  if RISK_STATE_FILE.exists():
+    try:
+      data = json.loads(RISK_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+      pass
+  data["max_equity_seen"] = equity
+  data["daily_equity_start"] = equity
+  data["daily_equity_date"] = datetime.now().strftime("%Y-%m-%d")
+  RISK_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+  RISK_STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def main() -> int:
   parser = argparse.ArgumentParser(description="Старт периода наблюдения sandbox")
   parser.add_argument("--reset-learned", action="store_true", help="Бэкап и очистка learned_params/params.json")
@@ -128,7 +143,9 @@ def main() -> int:
     baseline["baseline_corrected_at"] = datetime.now().isoformat()
     baseline["git_rev_deploy"] = _git_rev()
     BASELINE_FILE.write_text(json.dumps(baseline, ensure_ascii=False, indent=2), encoding="utf-8")
+    _sync_risk_state_to_equity(float(baseline.get("equity", equity)))
     print("Baseline обновлён (--update-baseline-only), lock и equity старта сохранены.")
+    print(f"risk_state синхронизирован с equity={baseline.get('equity', equity):.0f}")
     return 0
 
   # Свежий старт наблюдения: сбрасываем risk_state, иначе старый пик equity
