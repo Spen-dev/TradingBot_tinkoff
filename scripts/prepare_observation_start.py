@@ -62,6 +62,14 @@ def main() -> int:
     args.force = True
 
   if LOCK_FILE.exists() and not args.force:
+    try:
+      lock_data = json.loads(LOCK_FILE.read_text(encoding="utf-8"))
+      if lock_data.get("audit_days") is None:
+        lock_data["audit_days"] = 3
+        LOCK_FILE.write_text(json.dumps(lock_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"Lock дополнен audit_days=3: {LOCK_FILE}")
+    except Exception as e:
+      print(f"Lock: не удалось обновить audit_days: {e}")
     print(f"Наблюдение уже начато ({LOCK_FILE}), пропуск. --force для повтора.")
     return 0
 

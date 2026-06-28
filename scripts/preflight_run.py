@@ -29,6 +29,17 @@ def main() -> int:
 
   cfg = load_config(str(ROOT / "config.yaml"))
   ok_cfg, errs = validate_config(cfg)
+  instruments = list(cfg.instruments)
+  dp_path = ROOT / "data" / "dynamic_portfolio.json"
+  if dp_path.exists():
+    try:
+      from tinkoff_bot.dynamic_portfolio import instruments_from_state
+
+      dp_inst = instruments_from_state(json.loads(dp_path.read_text(encoding="utf-8")))
+      if dp_inst:
+        instruments = dp_inst
+    except Exception:
+      pass
   print("=== Config ===")
   print("OK" if ok_cfg else "FAIL")
   for e in errs:
@@ -56,7 +67,7 @@ def main() -> int:
     broker = TinkoffBroker(cfg.tinkoff)
     equity, cash, positions = broker.get_equity_snapshot(cfg.portfolio.base_currency)
     rows, max_dev = compute_portfolio_drift(
-      equity, cash, cfg.instruments, positions,
+      equity, cash, instruments, positions,
       drift_pct=float(getattr(cfg.portfolio, "rebalance_drift_pct", 0.05) or 0.05),
     )
     print("\n=== Portfolio ===")
@@ -75,7 +86,7 @@ def main() -> int:
     days=1,
     drift_pct=float(getattr(cfg.portfolio, "rebalance_drift_pct", 0.05) or 0.05),
     broker=broker,
-    instruments=cfg.instruments if broker else None,
+    instruments=instruments if broker else None,
     currency=cfg.portfolio.base_currency,
   )
   save_audit_report(ROOT, report)
