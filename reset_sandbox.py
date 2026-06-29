@@ -64,23 +64,33 @@ def _clear_local_data(base_dir: Path) -> None:
 
 
 def _patch_env_account_id(base_dir: Path, account_id: str) -> None:
-  """Обновить TINKOFF_ACCOUNT_ID в .env (если файл есть)."""
+  """Обновить TINKOFF_ACCOUNT_ID и SANDBOX_TARGET_CASH в .env (если файл есть)."""
   env_path = base_dir / ".env"
   if not env_path.exists():
     return
   lines = env_path.read_text(encoding="utf-8").splitlines()
   out: list[str] = []
-  replaced = False
+  replaced_account = False
+  replaced_cash = False
+  target_cash = os.getenv("SANDBOX_TARGET_CASH", "200000").strip() or "200000"
   for line in lines:
     if line.startswith("TINKOFF_ACCOUNT_ID="):
       out.append(f"TINKOFF_ACCOUNT_ID={account_id}")
-      replaced = True
+      replaced_account = True
+    elif line.startswith("SANDBOX_TARGET_CASH="):
+      out.append(f"SANDBOX_TARGET_CASH={target_cash}")
+      replaced_cash = True
     else:
       out.append(line)
-  if not replaced:
+  if not replaced_account:
     out.append(f"TINKOFF_ACCOUNT_ID={account_id}")
+  if not replaced_cash:
+    out.append(f"SANDBOX_TARGET_CASH={target_cash}")
   env_path.write_text("\n".join(out) + ("\n" if out else ""), encoding="utf-8")
-  print(f"Обновлён {env_path.relative_to(base_dir)}: TINKOFF_ACCOUNT_ID={account_id}")
+  print(
+    f"Обновлён {env_path.relative_to(base_dir)}: "
+    f"TINKOFF_ACCOUNT_ID={account_id}, SANDBOX_TARGET_CASH={target_cash}"
+  )
 
 
 def main() -> None:

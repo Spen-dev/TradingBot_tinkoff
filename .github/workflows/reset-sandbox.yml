@@ -30,9 +30,18 @@ jobs:
             cd /opt/TradingBot_tinkoff
             git fetch origin main
             git reset --hard origin/main
+            if [ -f .env ]; then
+              if grep -q '^SANDBOX_TARGET_CASH=' .env; then
+                sed -i 's/^SANDBOX_TARGET_CASH=.*/SANDBOX_TARGET_CASH=200000/' .env
+              else
+                echo 'SANDBOX_TARGET_CASH=200000' >> .env
+              fi
+            else
+              echo 'SANDBOX_TARGET_CASH=200000' > .env
+            fi
             docker compose stop bot
             docker compose run --rm --no-deps bot python reset_sandbox.py
-            docker compose up -d
+            docker compose up -d --force-recreate bot
             sleep 25
             docker compose exec -T bot python scripts/prepare_observation_start.py --force --reset-learned || true
             docker compose exec -T bot python scripts/preflight_run.py || true
