@@ -39,6 +39,16 @@ jobs:
             git reset --hard origin/main
             POST=$(git rev-parse HEAD)
 
+            if [ -f .env ]; then
+              if grep -q '^SANDBOX_TARGET_CASH=' .env; then
+                sed -i 's/^SANDBOX_TARGET_CASH=.*/SANDBOX_TARGET_CASH=200000/' .env
+              else
+                echo 'SANDBOX_TARGET_CASH=200000' >> .env
+              fi
+            else
+              echo 'SANDBOX_TARGET_CASH=200000' > .env
+            fi
+
             changed_files=""
             if [ "$PRE" != "$POST" ]; then
               changed_files=$(git diff --name-only "$PRE" "$POST")
@@ -71,19 +81,11 @@ jobs:
               echo "Code-only change: skip docker build."
             fi
 
-            if [ -f .env ]; then
-              if grep -q '^SANDBOX_TARGET_CASH=' .env; then
-                sed -i 's/^SANDBOX_TARGET_CASH=.*/SANDBOX_TARGET_CASH=200000/' .env
-              else
-                echo 'SANDBOX_TARGET_CASH=200000' >> .env
-              fi
-            else
-              echo 'SANDBOX_TARGET_CASH=200000' > .env
-            fi
             if $compose_changed; then
               docker compose up -d
+            else
+              docker compose up -d --force-recreate bot
             fi
-            docker compose restart bot
             sleep 20
             docker compose exec -T bot python scripts/sync_sandbox_balance.py || true
             docker compose exec -T bot python scripts/prepare_observation_start.py --update-baseline-only || true
