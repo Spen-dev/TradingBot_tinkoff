@@ -71,11 +71,21 @@ jobs:
               echo "Code-only change: skip docker build."
             fi
 
+            if [ -f .env ]; then
+              if grep -q '^SANDBOX_TARGET_CASH=' .env; then
+                sed -i 's/^SANDBOX_TARGET_CASH=.*/SANDBOX_TARGET_CASH=200000/' .env
+              else
+                echo 'SANDBOX_TARGET_CASH=200000' >> .env
+              fi
+            else
+              echo 'SANDBOX_TARGET_CASH=200000' > .env
+            fi
             if $compose_changed; then
               docker compose up -d
             fi
             docker compose restart bot
             sleep 20
+            docker compose exec -T bot python scripts/sync_sandbox_balance.py || true
             docker compose exec -T bot python scripts/prepare_observation_start.py --update-baseline-only || true
             docker compose exec -T bot python scripts/preflight_run.py || true
             docker compose ps

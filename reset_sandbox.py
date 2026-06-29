@@ -133,11 +133,11 @@ def main() -> None:
     new_id = opened.account_id
     print(f"\nОткрыт новый счёт песочницы: {new_id}")
 
-  raw = os.getenv("SANDBOX_TARGET_CASH", "120000").strip()
+  raw = os.getenv("SANDBOX_TARGET_CASH", "200000").strip()
   try:
     amount = float(raw)
   except ValueError:
-    amount = 120_000.0
+    amount = 200_000.0
   if amount > 0:
     tinkoff_cfg = TinkoffConfig(
       token=token,

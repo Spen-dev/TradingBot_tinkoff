@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Создать новый счёт в песочнице Тинькофф и пополнить (по умолчанию 120 000 ₽).
 
-Сумма: аргумент --amount, иначе переменная SANDBOX_TARGET_CASH из .env, иначе 120000.
+Сумма: аргумент --amount, иначе переменная SANDBOX_TARGET_CASH из .env, иначе 200000.
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def main() -> None:
     "--amount",
     type=float,
     default=None,
-    help="Сумма пополнения RUB (если не задано — SANDBOX_TARGET_CASH или 120000)",
+    help="Сумма пополнения RUB (если не задано — SANDBOX_TARGET_CASH или 200000)",
   )
   args = parser.parse_args()
 
@@ -36,7 +36,7 @@ def main() -> None:
   if args.amount is not None:
     amount = float(args.amount)
   else:
-    raw = os.getenv("SANDBOX_TARGET_CASH", "120000").strip()
+    raw = os.getenv("SANDBOX_TARGET_CASH", "200000").strip()
     try:
       amount = float(raw)
     except ValueError:

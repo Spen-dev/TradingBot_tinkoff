@@ -271,7 +271,7 @@ async def main() -> None:
           else:
             raise
 
-        target_cash = float(os.getenv("SANDBOX_TARGET_CASH", "100000"))
+        target_cash = float(os.getenv("SANDBOX_TARGET_CASH", "200000"))
         _, cash, positions = broker.get_equity_snapshot(currency=cfg.portfolio.base_currency)
         # Пополнение только пустого счёта (без позиций), не доливаем кэш при уже купленных бумагах.
         if target_cash > 0 and len(positions) == 0 and cash < target_cash:
