@@ -32,6 +32,11 @@ def _clear_local_data(base_dir: Path) -> None:
     "risk_state.json",
     "status_snapshot.json",
     "strategy_selection_state.json",
+    "dynamic_portfolio.json",
+    "macro_news_cache.json",
+    "macro_news_fingerprint.json",
+    "observation_lock.json",
+    "observation_baseline.json",
   ):
     p = data / name
     if p.exists():
@@ -40,7 +45,42 @@ def _clear_local_data(base_dir: Path) -> None:
         print(f"Удалён файл: {p.relative_to(base_dir)}")
       except OSError as e:
         print(f"Не удалось удалить {p}: {e}")
-  print("Локальная история сделок (trade_history) и связанное состояние очищены.")
+  bug_audit = data / "bug_audit"
+  if bug_audit.is_dir():
+    for p in bug_audit.glob("*.json"):
+      try:
+        p.unlink()
+        print(f"Удалён файл: {p.relative_to(base_dir)}")
+      except OSError as e:
+        print(f"Не удалось удалить {p}: {e}")
+  learned = base_dir / "learned_params" / "params.json"
+  if learned.exists():
+    try:
+      learned.write_text("{}", encoding="utf-8")
+      print(f"Очищен: {learned.relative_to(base_dir)}")
+    except OSError as e:
+      print(f"Не удалось очистить {learned}: {e}")
+  print("Локальная история сделок, состояние портфеля и наблюдения очищены.")
+
+
+def _patch_env_account_id(base_dir: Path, account_id: str) -> None:
+  """Обновить TINKOFF_ACCOUNT_ID в .env (если файл есть)."""
+  env_path = base_dir / ".env"
+  if not env_path.exists():
+    return
+  lines = env_path.read_text(encoding="utf-8").splitlines()
+  out: list[str] = []
+  replaced = False
+  for line in lines:
+    if line.startswith("TINKOFF_ACCOUNT_ID="):
+      out.append(f"TINKOFF_ACCOUNT_ID={account_id}")
+      replaced = True
+    else:
+      out.append(line)
+  if not replaced:
+    out.append(f"TINKOFF_ACCOUNT_ID={account_id}")
+  env_path.write_text("\n".join(out) + ("\n" if out else ""), encoding="utf-8")
+  print(f"Обновлён {env_path.relative_to(base_dir)}: TINKOFF_ACCOUNT_ID={account_id}")
 
 
 def main() -> None:
@@ -109,8 +149,9 @@ def main() -> None:
     print(f"Пополнение ~{amount:,.0f} {cfg.portfolio.base_currency or 'RUB'} выполнено (sandbox_pay_in).")
 
   _clear_local_data(base_dir)
+  _patch_env_account_id(base_dir, new_id)
 
-  print("\nОбновите .env:")
+  print("\nОбновите .env (если не обновлён автоматически):")
   print(f"  TINKOFF_ACCOUNT_ID={new_id}")
   print(f"  SANDBOX_TARGET_CASH={int(amount) if amount == int(amount) else amount}")
   print("\nПерезапустите бота (docker compose restart / run_bot).")

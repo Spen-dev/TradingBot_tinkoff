@@ -272,8 +272,9 @@ async def main() -> None:
             raise
 
         target_cash = float(os.getenv("SANDBOX_TARGET_CASH", "100000"))
-        cash = broker.get_cash_balance(currency=cfg.portfolio.base_currency)
-        if target_cash > 0 and cash < target_cash:
+        _, cash, positions = broker.get_equity_snapshot(currency=cfg.portfolio.base_currency)
+        # Пополнение только пустого счёта (без позиций), не доливаем кэш при уже купленных бумагах.
+        if target_cash > 0 and len(positions) == 0 and cash < target_cash:
           broker.set_sandbox_balance(target_cash - cash, currency=cfg.portfolio.base_currency)
 
       equity, cash, npos = compute_equity()
@@ -869,7 +870,6 @@ async def main() -> None:
     last_params_backup: datetime | None = None
     last_macro_news_check_date: date | None = None
     last_macro_index_trigger_date: date | None = None
-    last_sandbox_topup_date: date | None = None
     last_bug_audit_date: date | None = None
     macro_news_cfg = getattr(cfg, "macro_news", None)
     alert_live_ping_hours = getattr(cfg.portfolio, "alert_live_ping_hours", 0.0) or 0.0
@@ -1087,27 +1087,6 @@ async def main() -> None:
               )
             except Exception as e:
               logger.warning("bug_audit: %s", e)
-
-        if (
-          scheduler_ok
-          and ops_cfg
-          and ops_cfg.sandbox_auto_topup
-          and cfg.tinkoff.use_sandbox
-          and last_sandbox_topup_date != today
-        ):
-          try:
-            from tinkoff_bot.ops_automation import ensure_sandbox_funded
-
-            loop = asyncio.get_running_loop()
-            topup_msg = await loop.run_in_executor(
-              None,
-              lambda: ensure_sandbox_funded(broker, cfg.portfolio.base_currency),
-            )
-            if topup_msg:
-              last_sandbox_topup_date = today
-              await send_alert(tg, f"🏦 Sandbox: {topup_msg}", "sandbox_topup", force=True)
-          except Exception as e:
-            logger.debug("sandbox topup: %s", e)
 
         in_window = _in_rebalance_window()
         if (last_window_state is None) or (in_window != last_window_state) or (last_window_state_date != today):

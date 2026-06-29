@@ -158,7 +158,6 @@ ops:
   # macro_news_check_hours — устарело, интервал не используется (проверка только в торговом окне)
   macro_news_check_hours: 0
   learned_params_backup_interval_hours: 24
-  sandbox_auto_topup: true
   watchdog_exit_after_failures: 3       # выход → Docker restart: unless-stopped
   bug_audit_enabled: true               # 3-дн. аудит после prepare_observation_start
   bug_audit_days: 3

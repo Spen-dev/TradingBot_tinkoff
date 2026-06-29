@@ -100,20 +100,3 @@ def test_no_trades_alert_after_last_trade():
   assert send is True
   assert key == last
   assert "Нет сделок" in msg
-
-
-def test_ensure_sandbox_funded_tops_up_delta_not_full_target(monkeypatch):
-  from unittest.mock import MagicMock
-  from tinkoff_bot.ops_automation import ensure_sandbox_funded
-
-  monkeypatch.setenv("SANDBOX_TARGET_CASH", "100000")
-  broker = MagicMock()
-  # equity низкий (ниже 5% порога), cash близко к target — need < 1000
-  broker.get_equity_snapshot.return_value = (3_000.0, 99_500.0, {})
-  amounts = []
-  broker.set_sandbox_balance = lambda amt, currency="RUB": amounts.append(amt)
-  msg = ensure_sandbox_funded(broker, "RUB")
-  assert amounts
-  assert amounts[0] == 1000.0
-  assert amounts[0] != 100_000.0
-  assert msg is not None

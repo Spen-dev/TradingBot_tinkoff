@@ -99,7 +99,6 @@ class OpsConfig:
   macro_refresh_on_news_change: bool = True
   macro_news_check_hours: float = 0.0  # устарело: проверка RSS — раз в торговый день в окне ребаланса
   learned_params_backup_interval_hours: float = 24.0
-  sandbox_auto_topup: bool = True
   watchdog_exit_after_failures: int = 3
   bug_audit_enabled: bool = True
   bug_audit_days: int = 3
@@ -477,7 +476,6 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     macro_refresh_on_news_change=bool(op_raw.get("macro_refresh_on_news_change", True)),
     macro_news_check_hours=float(op_raw.get("macro_news_check_hours", 0.0) or 0.0),
     learned_params_backup_interval_hours=float(op_raw.get("learned_params_backup_interval_hours", 24.0) or 24.0),
-    sandbox_auto_topup=bool(op_raw.get("sandbox_auto_topup", True)),
     watchdog_exit_after_failures=int(op_raw.get("watchdog_exit_after_failures", 3) or 3),
     bug_audit_enabled=bool(op_raw.get("bug_audit_enabled", True)),
     bug_audit_days=int(op_raw.get("bug_audit_days", 3) or 3),

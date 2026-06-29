@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import shutil
 import urllib.error
 import urllib.request
@@ -150,29 +149,3 @@ def no_trades_alert_payload(
   else:
     msg = f"⚠️ Нет сделок более {hours} ч. Проверьте логи и доступ к брокеру."
   return True, alert_key, msg
-
-
-def ensure_sandbox_funded(broker: Any, currency: str = "RUB") -> Optional[str]:
-  """Пополнить песочницу до SANDBOX_TARGET_CASH, если баланс сильно ниже."""
-  target = float(os.getenv("SANDBOX_TARGET_CASH", "100000") or 0)
-  if target <= 0:
-    return None
-  try:
-    equity, cash, npos = broker.get_equity_snapshot(currency)
-  except Exception as e:
-    logger.warning("ensure_sandbox_funded: %s", e)
-    return None
-  if equity > target * 0.05 and cash > target * 0.05:
-    return None
-  need = max(0.0, target - cash)
-  if need <= 0:
-    return None
-  # Минимальная сумма пополнения API; не подменять need на весь target.
-  if 0 < need < 1000:
-    need = 1000.0
-  try:
-    broker.set_sandbox_balance(need, currency=currency)
-    return f"пополнено +{need:.0f} {currency} (было equity={equity:.0f})"
-  except Exception as e:
-    logger.warning("set_sandbox_balance: %s", e)
-    return None
