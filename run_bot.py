@@ -867,7 +867,7 @@ async def main() -> None:
     last_weekly_report_date: date | None = None
     last_openrouter_balance_check: datetime | None = None
     last_params_backup: datetime | None = None
-    last_macro_news_check: datetime | None = None
+    last_macro_news_check_date: date | None = None
     last_macro_index_trigger_date: date | None = None
     last_sandbox_topup_date: date | None = None
     last_bug_audit_date: date | None = None
@@ -920,6 +920,7 @@ async def main() -> None:
     last_market_check_date: date | None = None
     market_vol_level: str = "normal"  # low / normal / high
     panic_today: bool = False
+    macro_index_drop_pending: bool = False
 
     tz_name = (getattr(cfg.portfolio, "trading_timezone", None) or "").strip()
 
@@ -1108,41 +1109,6 @@ async def main() -> None:
           except Exception as e:
             logger.debug("sandbox topup: %s", e)
 
-        if (
-          scheduler_ok
-          and dp_cfg
-          and dp_cfg.enabled
-          and dp_cfg.use_macro
-          and macro_news_cfg
-          and ops_cfg
-          and ops_cfg.macro_refresh_on_news_change
-          and ops_cfg.macro_news_check_hours > 0
-        ):
-          if last_macro_news_check is None or (
-            now - last_macro_news_check
-          ).total_seconds() >= ops_cfg.macro_news_check_hours * 3600:
-            last_macro_news_check = now
-            try:
-              from tinkoff_bot.ops_automation import should_refresh_portfolio_for_news
-
-              loop = asyncio.get_running_loop()
-              do_refresh, reason = await loop.run_in_executor(
-                None,
-                lambda: should_refresh_portfolio_for_news(
-                  macro_news_cfg,
-                  base_dir=base_dir,
-                  refresh_on_news_change=ops_cfg.macro_refresh_on_news_change,
-                ),
-              )
-              if do_refresh:
-                if cfg.portfolio.is_rebalance_trading_day(today):
-                  logger.info("macro news trigger: %s", reason)
-                  await apply_dynamic_portfolio(force=True, notify=True)
-                else:
-                  logger.info("macro news trigger: %s — пропуск (MOEX не торгует)", reason)
-            except Exception as e:
-              logger.warning("macro news check: %s", e)
-
         in_window = _in_rebalance_window()
         if (last_window_state is None) or (in_window != last_window_state) or (last_window_state_date != today):
           last_window_state = in_window
@@ -1177,6 +1143,7 @@ async def main() -> None:
           # До тяжёлого недельного отчёта: иначе цикл мог дойти до ребаланса уже после закрытия окна.
           if market_index_figi and last_market_check_date != today:
             last_market_check_date = today
+            macro_index_drop_pending = False
             panic_today = False
             try:
               from_dt = today - timedelta(days=3)
@@ -1207,15 +1174,11 @@ async def main() -> None:
                     and abs(ret) >= ops_cfg.macro_refresh_on_index_drop_pct
                     and last_macro_index_trigger_date != today
                   ):
-                    last_macro_index_trigger_date = today
-                    logger.info("macro index trigger: ret=%.2f%%", ret * 100)
-                    try:
-                      if cfg.portfolio.is_rebalance_trading_day(today):
-                        await apply_dynamic_portfolio(force=True, notify=True)
-                      else:
-                        logger.info("macro index trigger: пропуск (MOEX не торгует)")
-                    except Exception as e:
-                      logger.warning("macro index refresh: %s", e)
+                    macro_index_drop_pending = True
+                    logger.info(
+                      "macro index trigger: ret=%.2f%% — обновление портфеля в торговом окне",
+                      ret * 100,
+                    )
             except Exception:
               market_vol_level = "normal"
           if scheduler_ok and day_start_equity is None:
@@ -1245,12 +1208,54 @@ async def main() -> None:
                 logger.info("Автоочистка логов: удалено файлов %d (хранение %d дн.)", removed, log_retention)
             except Exception as e:
               logger.warning("Автоочистка логов: %s", e)
-          if dp_cfg and dp_cfg.enabled and _can_auto_rebalance() and last_dynamic_portfolio_date != today:
-            last_dynamic_portfolio_date = today
-            try:
-              await apply_dynamic_portfolio(force=False, notify=True)
-            except Exception as e:
-              logger.warning("dynamic_portfolio (планировщик): %s", e)
+          if dp_cfg and dp_cfg.enabled and _can_auto_rebalance() and cfg.portfolio.is_rebalance_trading_day(today):
+            portfolio_refreshed_today = False
+            if macro_index_drop_pending and last_macro_index_trigger_date != today:
+              last_macro_index_trigger_date = today
+              macro_index_drop_pending = False
+              logger.info("macro index trigger: обновление портфеля (торговое окно)")
+              try:
+                await apply_dynamic_portfolio(force=True, notify=True)
+                portfolio_refreshed_today = True
+              except Exception as e:
+                logger.warning("macro index refresh: %s", e)
+            if (
+              macro_news_cfg
+              and ops_cfg
+              and dp_cfg.use_macro
+              and ops_cfg.macro_refresh_on_news_change
+              and last_macro_news_check_date != today
+            ):
+              last_macro_news_check_date = today
+              try:
+                from tinkoff_bot.ops_automation import should_refresh_portfolio_for_news
+
+                loop = asyncio.get_running_loop()
+                do_refresh, reason = await loop.run_in_executor(
+                  None,
+                  lambda: should_refresh_portfolio_for_news(
+                    macro_news_cfg,
+                    base_dir=base_dir,
+                    refresh_on_news_change=ops_cfg.macro_refresh_on_news_change,
+                  ),
+                )
+                if do_refresh:
+                  logger.info("macro news trigger: %s", reason)
+                  await apply_dynamic_portfolio(force=True, notify=True)
+                  portfolio_refreshed_today = True
+                else:
+                  logger.debug("macro news check: %s", reason)
+              except Exception as e:
+                logger.warning("macro news check: %s", e)
+            if last_dynamic_portfolio_date != today:
+              last_dynamic_portfolio_date = today
+              if not portfolio_refreshed_today:
+                try:
+                  await apply_dynamic_portfolio(force=False, notify=True)
+                except Exception as e:
+                  logger.warning("dynamic_portfolio (планировщик): %s", e)
+              else:
+                logger.debug("dynamic_portfolio (планировщик): пропуск — уже обновлён по новостям")
           if last_day_reset_date is None and day_start_equity is not None:
             last_day_reset_date = today
           interval_sched_due = ri_hours > 0 and (

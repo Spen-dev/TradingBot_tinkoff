@@ -138,7 +138,7 @@ dynamic_portfolio:
 macro_news:
   max_headlines_per_feed: 10
   max_headlines_total: 25
-  cache_hours: 8.0              # кэш заголовков (часы); синхрон с ops.macro_news_check_hours
+  cache_hours: 24.0             # кэш RSS между ежедневными проверками в торговом окне
   cache_file: "data/macro_news_cache.json"
   request_timeout_seconds: 20
   rss_urls:
@@ -153,9 +153,10 @@ ops:
   block_trading_on_config_error: true   # sandbox/real: не торговать при ошибках конфига
   openrouter_min_balance_usd: 2.0
   openrouter_balance_check_hours: 24
-  macro_refresh_on_index_drop_pct: 0.03 # вне 7-дн. цикла: обновить портфель при падении индекса
-  macro_refresh_on_news_change: true
-  macro_news_check_hours: 8
+  macro_refresh_on_index_drop_pct: 0.03 # вне 7-дн. цикла: обновить портфель при падении индекса (в торговом окне)
+  macro_refresh_on_news_change: true    # RSS: раз в торговый день при входе в окно rebalance_time…window_end
+  # macro_news_check_hours — устарело, интервал не используется (проверка только в торговом окне)
+  macro_news_check_hours: 0
   learned_params_backup_interval_hours: 24
   sandbox_auto_topup: true
   watchdog_exit_after_failures: 3       # выход → Docker restart: unless-stopped

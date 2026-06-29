@@ -97,7 +97,7 @@ class OpsConfig:
   openrouter_balance_check_hours: float = 24.0
   macro_refresh_on_index_drop_pct: float = 0.03
   macro_refresh_on_news_change: bool = True
-  macro_news_check_hours: float = 6.0
+  macro_news_check_hours: float = 0.0  # устарело: проверка RSS — раз в торговый день в окне ребаланса
   learned_params_backup_interval_hours: float = 24.0
   sandbox_auto_topup: bool = True
   watchdog_exit_after_failures: int = 3
@@ -475,7 +475,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     openrouter_balance_check_hours=float(op_raw.get("openrouter_balance_check_hours", 24.0) or 24.0),
     macro_refresh_on_index_drop_pct=float(op_raw.get("macro_refresh_on_index_drop_pct", 0.03) or 0.03),
     macro_refresh_on_news_change=bool(op_raw.get("macro_refresh_on_news_change", True)),
-    macro_news_check_hours=float(op_raw.get("macro_news_check_hours", 6.0) or 6.0),
+    macro_news_check_hours=float(op_raw.get("macro_news_check_hours", 0.0) or 0.0),
     learned_params_backup_interval_hours=float(op_raw.get("learned_params_backup_interval_hours", 24.0) or 24.0),
     sandbox_auto_topup=bool(op_raw.get("sandbox_auto_topup", True)),
     watchdog_exit_after_failures=int(op_raw.get("watchdog_exit_after_failures", 3) or 3),
