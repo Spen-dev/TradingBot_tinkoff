@@ -7,7 +7,7 @@ import logging
 import math
 
 import numpy as np
-from tinkoff.invest import OrderDirection, OrderType
+from t_tech.invest import OrderDirection, OrderType
 
 from .config import InstrumentConfig, PortfolioConfig
 from .broker import TinkoffBroker, Position

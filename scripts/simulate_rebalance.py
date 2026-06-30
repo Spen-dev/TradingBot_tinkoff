@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env")
 
-from tinkoff.invest import OrderDirection
+from t_tech.invest import OrderDirection
 
 from tinkoff_bot.broker import TinkoffBroker
 from tinkoff_bot.config import load_config

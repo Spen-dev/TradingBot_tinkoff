@@ -1,6 +1,5 @@
 # Основной способ установки: pip install -e ".[dev]"
 -e .[dev]
 
-# Tinkoff SDK (пакет tinkoff-invest на PyPI недоступен — как в Dockerfile):
-# pip install --no-deps "tinkoff-investments @ git+https://github.com/Tinkoff/invest-python.git"
-# pip install "cachetools>=5.2.0,<6" "grpcio>=1.39.0,<2.0.0" "protobuf>=4.21.6,<5.0.0" "python-dateutil>=2.8.2,<3.0.0" "deprecation>=2.1.0,<3.0.0"
+# T-Invest SDK (tbank.ru, сертификат Минцифры — как в Dockerfile):
+# pip install "t-tech-investments==1.49.2" --index-url https://opensource.tbank.ru/api/v4/projects/238/packages/pypi/simple

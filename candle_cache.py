@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from .broker import TinkoffBroker
-from tinkoff.invest import CandleInterval
+from t_tech.invest import CandleInterval
 
 logger = logging.getLogger(__name__)
 

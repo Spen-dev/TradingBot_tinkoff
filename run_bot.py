@@ -8,7 +8,7 @@ from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import NamedTuple
 
-from tinkoff.invest.exceptions import RequestError
+from t_tech.invest.exceptions import RequestError
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +259,7 @@ async def main() -> None:
           _ = broker.get_cash_balance(currency=cfg.portfolio.base_currency)
         except RequestError as e:
           if str(e).find("50004") != -1:
-            from tinkoff.invest.sandbox.client import SandboxClient
+            from t_tech.invest.sandbox.client import SandboxClient
 
             with SandboxClient(cfg.tinkoff.token) as client:
               sand = client.users.get_accounts()

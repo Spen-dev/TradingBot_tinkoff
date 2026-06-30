@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from tinkoff.invest.sandbox.client import SandboxClient
+from t_tech.invest.sandbox.client import SandboxClient
 
 from tinkoff_bot.config import TinkoffConfig, load_config
 from tinkoff_bot.broker import TinkoffBroker

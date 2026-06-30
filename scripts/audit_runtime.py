@@ -91,7 +91,7 @@ def check_place_order_double_retry() -> None:
   from tinkoff_bot.config import PortfolioConfig, RiskConfig, InstrumentConfig
   from tinkoff_bot.portfolio import PortfolioManager, RebalanceOrder
   from tinkoff_bot.risk import RiskManager
-  from tinkoff.invest import OrderDirection
+  from t_tech.invest import OrderDirection
 
   pcfg = PortfolioConfig(
     base_currency="RUB", rebalance_frequency="daily", rebalance_time="10:00",

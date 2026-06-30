@@ -1,7 +1,7 @@
 """Тесты retry-логики брокера."""
 import grpc
 import pytest
-from tinkoff.invest.exceptions import RequestError
+from t_tech.invest.exceptions import RequestError
 
 from tinkoff_bot.broker import _is_retryable_broker_error, _with_broker_retry
 

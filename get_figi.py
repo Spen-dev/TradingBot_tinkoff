@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from tinkoff.invest import Client
+from t_tech.invest import Client
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 TOKEN = os.getenv("TINKOFF_TOKEN")

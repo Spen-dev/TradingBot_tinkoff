@@ -1,6 +1,6 @@
 import os
 
-from tinkoff.invest import Client
+from t_tech.invest import Client
 from dotenv import load_dotenv
 
 

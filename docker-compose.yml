@@ -6,6 +6,8 @@ services:
     container_name: tinkoff_bot
     restart: unless-stopped
     env_file: .env
+    environment:
+      SSL_TBANK_VERIFY: "True"
     volumes:
       - ./data:/app/data
       - ./learned_params:/app/learned_params

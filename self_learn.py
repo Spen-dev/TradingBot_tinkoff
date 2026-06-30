@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from tinkoff.invest import CandleInterval
+from t_tech.invest import CandleInterval
 
 from .broker import TinkoffBroker
 from .config import InstrumentConfig

@@ -1,6 +1,6 @@
 """FIGI и лот по тикерам (для настройки config.yaml)."""
 import os
-from tinkoff.invest import Client
+from t_tech.invest import Client
 
 TICKERS = ["SBER", "LKOH", "GMKN", "PLZL", "MGNT", "TATN", "MOEX"]
 

@@ -11,8 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /
 
 # Слой зависимостей кэшируется, пока не меняется pyproject.toml
 COPY pyproject.toml .
-RUN pip install --no-cache-dir --no-deps "tinkoff-investments @ git+https://github.com/Tinkoff/invest-python.git" && \
-    pip install --no-cache-dir "cachetools>=5.2.0,<6" "grpcio>=1.39.0,<2.0.0" "protobuf>=4.21.6,<5.0.0" "python-dateutil>=2.8.2,<3.0.0" "deprecation>=2.1.0,<3.0.0" && \
+RUN pip install --no-cache-dir "t-tech-investments==1.49.2" --index-url https://opensource.tbank.ru/api/v4/projects/238/packages/pypi/simple && \
     pip install --no-cache-dir "python-dotenv" "PyYAML" "pandas" "prometheus-client" "aiogram" "openai" "optuna"
 
 COPY . .

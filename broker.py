@@ -8,7 +8,7 @@ import time
 import pandas as pd
 from decimal import Decimal
 
-from tinkoff.invest import (
+from t_tech.invest import (
   Client,
   CandleInterval,
   InstrumentIdType,
@@ -17,9 +17,9 @@ from tinkoff.invest import (
   OrderType,
   MoneyValue,
 )
-from tinkoff.invest.exceptions import RequestError
-from tinkoff.invest.utils import decimal_to_quotation
-from tinkoff.invest.sandbox.client import SandboxClient
+from t_tech.invest.exceptions import RequestError
+from t_tech.invest.utils import decimal_to_quotation
+from t_tech.invest.sandbox.client import SandboxClient
 
 from .config import TinkoffConfig
 
