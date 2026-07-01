@@ -114,14 +114,14 @@ async def main() -> None:
 
   fallback_alert_last_date: date | None = None
 
-  async def apply_dynamic_portfolio(force: bool = False, notify: bool = False) -> str:
+  async def apply_dynamic_portfolio(force: bool = False, notify: bool = False) -> tuple[str, str]:
     nonlocal fallback_alert_last_date
     if not dp_cfg or not dp_cfg.enabled:
-      return "Динамический портфель отключён (dynamic_portfolio.enabled=false)."
+      return "Динамический портфель отключён (dynamic_portfolio.enabled=false).", ""
     from tinkoff_bot.dynamic_portfolio import refresh_dynamic_portfolio
     loop = asyncio.get_running_loop()
     try:
-      instruments, msg, changed = await loop.run_in_executor(
+      instruments, msg, changed, comparison = await loop.run_in_executor(
         None,
         lambda: refresh_dynamic_portfolio(
           dp_cfg,
@@ -140,7 +140,7 @@ async def main() -> None:
       )
     except Exception as e:
       logger.exception("dynamic_portfolio: %s", e)
-      return f"Ошибка обновления состава: {e}"
+      return f"Ошибка обновления состава: {e}", ""
     if instruments:
       # Меняем состав под тем же локом, что и ребаланс — иначе заявки могут уйти по уже устаревшему составу.
       async with rebalance_lock:
@@ -150,6 +150,10 @@ async def main() -> None:
         logger.info("dynamic_portfolio обновлён: %s", msg)
         if notify:
           await send_alert(tg, f"📊 Состав портфеля обновлён: {msg}", "dynamic_portfolio", force=True)
+          if comparison:
+            await send_alert(tg, comparison, "advisor_comparison", force=True)
+      elif notify and comparison:
+        await send_alert(tg, comparison, "advisor_comparison", force=True)
     msg_l = msg.lower()
     if (
       "статический конфиг" in msg
@@ -161,15 +165,18 @@ async def main() -> None:
       if fallback_alert_last_date != alert_day:
         fallback_alert_last_date = alert_day
         await send_alert(tg, f"⚠️ Dynamic portfolio fallback: {msg}", "dynamic_fallback", force=True)
-    return msg
+    return msg, comparison
 
   async def on_refresh_portfolio() -> str:
-    return await apply_dynamic_portfolio(force=True)
+    msg, _ = await apply_dynamic_portfolio(force=True)
+    return msg
 
   if dp_cfg and dp_cfg.enabled:
-    dp_msg = await apply_dynamic_portfolio(force=False)
+    dp_msg, comparison = await apply_dynamic_portfolio(force=False)
     logger.info("Динамический портфель при старте: %s", dp_msg)
     await send_alert(tg, f"📊 Динамический портфель: {dp_msg}", "dynamic_portfolio", force=True)
+    if comparison:
+      await send_alert(tg, comparison, "advisor_comparison", force=True)
 
   async def broker_get_cash_async():
     loop = asyncio.get_running_loop()

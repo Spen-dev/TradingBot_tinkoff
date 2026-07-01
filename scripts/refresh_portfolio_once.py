@@ -15,7 +15,7 @@ def main() -> None:
   if not dp or not dp.enabled:
     print("dynamic_portfolio disabled")
     return
-  inst, msg, changed = refresh_dynamic_portfolio(
+  inst, msg, changed, comparison = refresh_dynamic_portfolio(
     dp,
     broker,
     cfg.instruments,
@@ -29,6 +29,8 @@ def main() -> None:
     ai_priority=bool(getattr(cfg.portfolio, "advisor_ai_priority", True)),
   )
   print(msg)
+  if comparison:
+    print(comparison)
   print("changed:", changed)
   for i in inst:
     print(f"  {i.ticker} {i.target_weight:.1%}")

@@ -222,10 +222,10 @@ def refresh_dynamic_portfolio(
   macro_news_cfg: Any = None,
   ai_mode: bool = False,
   ai_priority: bool = True,
-) -> Tuple[List[InstrumentConfig], str, bool]:
+) -> Tuple[List[InstrumentConfig], str, bool, str]:
   """
   Обновляет состав портфеля через все активные советники; при pick_best_advisor — лучший по бэктесту.
-  Возвращает (instruments, message, changed).
+  Возвращает (instruments, message, changed, advisor_comparison для Telegram).
   """
   base = base_dir or Path(__file__).resolve().parent
   state_path = base / (dp.state_file or DEFAULT_STATE_FILE)
@@ -237,11 +237,11 @@ def refresh_dynamic_portfolio(
       if ai_mode:
         instruments = apply_ai_strategy_to_instruments(instruments)
       updated = state.get("updated_at", "")[:16]
-      return instruments, f"Динамический портфель из кэша ({updated})", False
+      return instruments, f"Динамический портфель из кэша ({updated})", False, ""
 
   candidates = get_candidates(dp, fallback_instruments)
   if not candidates:
-    return fallback_instruments, "Нет кандидатов для динамического портфеля", False
+    return fallback_instruments, "Нет кандидатов для динамического портфеля", False, ""
 
   try:
     equity, _, _ = broker.get_equity_snapshot()
@@ -253,7 +253,7 @@ def refresh_dynamic_portfolio(
   from .finam_client import FinamClient
   from .moex_client import MoexClient
   from . import finam_advisor, moex_advisor
-  from .advisor_ensemble import pick_best_portfolio
+  from .advisor_ensemble import pick_best_portfolio, format_advisor_pick_comparison
   from .market_data_client import CompositeMarketClient
 
   finam_client = FinamClient(
@@ -341,9 +341,19 @@ def refresh_dynamic_portfolio(
       msg = "Советники недоступны, используется статический конфиг ({0} инструментов)".format(len(fallback_instruments))
       if state and instruments_from_state(state):
         cached = instruments_from_state(state)
-        return cached, msg + " (кэш сохранён ранее)", False
-      return fallback_instruments, msg, False
-    return fallback_instruments, "Советники не вернули состав, изменений нет", False
+        return cached, msg + " (кэш сохранён ранее)", False, ""
+      return fallback_instruments, msg, False, ""
+    return fallback_instruments, "Советники не вернули состав, изменений нет", False, ""
+
+  comparison = ""
+  if proposals:
+    comparison = format_advisor_pick_comparison(
+      proposals,
+      advisor_source,
+      market_client,
+      history_days=max(history_days, 60),
+      ai_priority=ai_priority,
+    )
 
   instruments = instruments_from_selections(selections, broker, dp.default_strategy)
   if ai_mode:
@@ -353,9 +363,9 @@ def refresh_dynamic_portfolio(
     logger.warning("dynamic_portfolio: %s", msg)
     if dp.fallback_to_static and fallback_instruments:
       if state and instruments_from_state(state):
-        return instruments_from_state(state), msg + " (кэш)", False
-      return fallback_instruments, msg, False
-    return fallback_instruments, msg, False
+        return instruments_from_state(state), msg + " (кэш)", False, comparison
+      return fallback_instruments, msg, False, comparison
+    return fallback_instruments, msg, False, comparison
 
   tickers = ", ".join(f"{i.ticker} {i.target_weight:.0%}" for i in instruments)
   msg = combined_summary or f"{advisor_source} выбрал: {tickers}"
@@ -374,4 +384,4 @@ def refresh_dynamic_portfolio(
         break
 
   save_state(state_path, instruments, summary=combined_summary, advisor_source=advisor_source)
-  return instruments, msg, changed
+  return instruments, msg, changed, comparison

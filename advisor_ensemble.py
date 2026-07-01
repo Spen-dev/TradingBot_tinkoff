@@ -172,6 +172,71 @@ def pick_best_portfolio(
   return best_name, best_sel, msg, best_score
 
 
+def _proposal_tickers_line(sel: List[Dict[str, Any]], limit: int = 6) -> str:
+  parts = [f"{s['ticker']} {float(s.get('target_weight', 0)):.0%}" for s in sel[:limit]]
+  return ", ".join(parts)
+
+
+def _proposal_score(
+  name: str,
+  sel: List[Dict[str, Any]],
+  market_client: CompositeMarketClient,
+  history_days: int,
+  ai_priority: bool,
+) -> Tuple[float, float]:
+  if not sel:
+    return 0.0, 0.0
+  if market_client.configured:
+    raw = score_portfolio_proposal(market_client, sel, history_days)
+  else:
+    raw = sum(float(s.get("target_weight", 0)) for s in sel)
+  adj = _advisor_score_with_ai_priority(name, raw, ai_priority)
+  return raw, adj
+
+
+def format_advisor_pick_comparison(
+  proposals: List[Tuple[str, List[Dict[str, Any]], str]],
+  winner: str,
+  market_client: CompositeMarketClient,
+  *,
+  history_days: int = 90,
+  ai_priority: bool = False,
+) -> str:
+  """Текст для Telegram: сравнение macro / moex / finam и победитель pick_best."""
+  labels = {"macro": "Macro (RSS+LLM)", "moex": "MOEX", "finam": "Finam"}
+  if not proposals:
+    return ""
+
+  scored: List[Tuple[str, float, float, str, str]] = []
+  for name, sel, summary in proposals:
+    raw, adj = _proposal_score(name, sel, market_client, history_days, ai_priority)
+    tickers = _proposal_tickers_line(sel) if sel else "—"
+    scored.append((name, raw, adj, tickers, summary or ""))
+  scored.sort(key=lambda row: -row[2])
+
+  lines = ["📊 Macro vs MOEX (pick_best по Sharpe):"]
+  for name, raw, adj, tickers, summary in scored:
+    label = labels.get(name, name)
+    mark = "✅" if name == winner else "·"
+    if market_client.configured:
+      lines.append(f"{mark} {label}: adj={adj:.3f} (raw={raw:.3f})")
+    else:
+      lines.append(f"{mark} {label}: score={adj:.3f}")
+    lines.append(f"   {tickers}")
+    if name == "macro" and summary:
+      short = summary.replace("\n", " ")[:140]
+      if short:
+        lines.append(f"   {short}")
+
+  missing = [labels.get(k, k) for k in ("macro", "moex") if k not in {p[0] for p in proposals}]
+  if missing:
+    lines.append(f"   (нет предложения: {', '.join(missing)})")
+
+  if winner:
+    lines.append(f"→ Выбран: {labels.get(winner, winner)}")
+  return "\n".join(lines)
+
+
 def _pick_best_recommendation_proposals(
   proposals: List[Tuple[str, Dict[str, Dict[str, Any]]]],
   instruments: List[Any],
