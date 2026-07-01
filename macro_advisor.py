@@ -40,14 +40,20 @@ def select_portfolio_via_macro(
   rss_urls = list(getattr(macro_cfg, "rss_urls", None) or [])
   headlines = collect_macro_headlines(
     rss_urls or None,
-    max_per_feed=int(getattr(macro_cfg, "max_headlines_per_feed", 10) or 10),
-    max_total=int(getattr(macro_cfg, "max_headlines_total", 25) or 25),
-    cache_hours=float(getattr(macro_cfg, "cache_hours", 6.0) or 0),
+    max_per_feed=int(getattr(macro_cfg, "max_headlines_per_feed", 15) or 15),
+    max_total=int(getattr(macro_cfg, "max_headlines_total", 40) or 40),
+    max_age_days=int(getattr(macro_cfg, "max_age_days", 14) or 14),
+    cache_hours=float(getattr(macro_cfg, "cache_hours", 12.0) or 0),
     cache_file=str(getattr(macro_cfg, "cache_file", "data/macro_news_cache.json") or "data/macro_news_cache.json"),
     timeout=float(getattr(macro_cfg, "request_timeout_seconds", 20) or 20),
     base_dir=base_dir,
   )
-  events_text = format_headlines_for_llm(headlines)
+  events_text = format_headlines_for_llm(
+    headlines,
+    max_lines=int(getattr(macro_cfg, "max_headlines_total", 40) or 40),
+    include_description=bool(getattr(macro_cfg, "include_description", True)),
+    max_description_chars=int(getattr(macro_cfg, "max_description_chars", 200) or 200),
+  )
   if not events_text.strip():
     return [], "macro: не удалось загрузить новости (RSS)"
 

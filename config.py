@@ -80,9 +80,12 @@ class DynamicPortfolioConfig:
 class MacroNewsConfig:
   """RSS-новости для macro-советника (события → LLM → портфель)."""
   rss_urls: List[str] = field(default_factory=list)
-  max_headlines_per_feed: int = 10
-  max_headlines_total: int = 25
-  cache_hours: float = 6.0
+  max_headlines_per_feed: int = 15
+  max_headlines_total: int = 40
+  max_age_days: int = 14
+  include_description: bool = True
+  max_description_chars: int = 200
+  cache_hours: float = 12.0
   cache_file: str = "data/macro_news_cache.json"
   request_timeout_seconds: float = 20.0
 
@@ -432,9 +435,12 @@ def load_config(path: str = "config.yaml") -> AppConfig:
   mn_urls_raw = mn_raw.get("rss_urls")
   macro_news = MacroNewsConfig(
     rss_urls=[str(u) for u in mn_urls_raw if u] if mn_urls_raw else list(DEFAULT_RSS_URLS),
-    max_headlines_per_feed=int(mn_raw.get("max_headlines_per_feed", 10) or 10),
-    max_headlines_total=int(mn_raw.get("max_headlines_total", 25) or 25),
-    cache_hours=float(mn_raw.get("cache_hours", 6.0) or 6.0),
+    max_headlines_per_feed=int(mn_raw.get("max_headlines_per_feed", 15) or 15),
+    max_headlines_total=int(mn_raw.get("max_headlines_total", 40) or 40),
+    max_age_days=int(mn_raw.get("max_age_days", 14) or 14),
+    include_description=bool(mn_raw.get("include_description", True)),
+    max_description_chars=int(mn_raw.get("max_description_chars", 200) or 200),
+    cache_hours=float(mn_raw.get("cache_hours", 12.0) or 12.0),
     cache_file=str(mn_raw.get("cache_file", "data/macro_news_cache.json") or "data/macro_news_cache.json"),
     request_timeout_seconds=float(mn_raw.get("request_timeout_seconds", 20) or 20),
   )

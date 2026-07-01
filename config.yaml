@@ -136,15 +136,21 @@ dynamic_portfolio:
 
 # Macro-советник: RSS-новости → OpenRouter → динамический портфель
 macro_news:
-  max_headlines_per_feed: 10
-  max_headlines_total: 25
-  cache_hours: 24.0             # кэш RSS между ежедневными проверками в торговом окне
+  max_headlines_per_feed: 15
+  max_headlines_total: 40
+  max_age_days: 14              # не передавать в LLM заголовки старше N дней (если дата распознана)
+  include_description: true     # snippet/description из RSS в prompt LLM
+  max_description_chars: 200
+  cache_hours: 12.0             # кэш RSS между ежедневными проверками в торговом окне
   cache_file: "data/macro_news_cache.json"
   request_timeout_seconds: 20
   rss_urls:
     - "https://news.google.com/rss/search?q=Russia+economy+oil+MOEX+stocks&hl=en&gl=US&ceid=US:en"
     - "https://news.google.com/rss/search?q=ЦБ+РФ+нефть+санкции+биржа+MOEX&hl=ru&gl=RU&ceid=RU:ru"
     - "https://news.google.com/rss/search?q=global+markets+geopolitics+commodities&hl=en&gl=US&ceid=US:en"
+    - "https://news.google.com/rss/search?q=MOEX+IMOEX+индекс+акции&hl=ru&gl=RU&ceid=RU:ru"
+    - "https://news.google.com/rss/search?q=ЦБ+РФ+ключевая+ставка&hl=ru&gl=RU&ceid=RU:ru"
+    - "https://news.google.com/rss/search?q=Brent+oil+price+OPEC&hl=en&gl=US&ceid=US:en"
 
 # Автоматизация эксплуатации (минимум ручных действий)
 ops:

@@ -13,6 +13,7 @@ SAMPLE_RSS = """<?xml version="1.0"?>
       <title>Oil prices rise on supply concerns</title>
       <pubDate>Mon, 15 Jun 2026 10:00:00 GMT</pubDate>
       <link>https://example.com/1</link>
+      <description>Brent up 2% on OPEC headlines.</description>
     </item>
     <item>
       <title>ЦБ сохранил ключевую ставку</title>
@@ -26,6 +27,7 @@ def test_parse_rss_xml_extracts_titles():
   rows = _parse_rss_xml(SAMPLE_RSS, "test-feed", 5)
   assert len(rows) == 2
   assert "Oil" in rows[0]["title"]
+  assert "Brent" in rows[0].get("description", "")
   assert "ЦБ" in rows[1]["title"]
 
 

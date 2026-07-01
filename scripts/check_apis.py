@@ -70,8 +70,9 @@ def check_macro_news() -> dict:
     urls = list(getattr(mn, "rss_urls", None) or [])
     headlines = collect_macro_headlines(
       urls,
-      max_per_feed=int(getattr(mn, "max_headlines_per_feed", 10) or 10),
-      max_total=int(getattr(mn, "max_headlines_total", 25) or 25),
+      max_per_feed=int(getattr(mn, "max_headlines_per_feed", 15) or 15),
+      max_total=int(getattr(mn, "max_headlines_total", 40) or 40),
+      max_age_days=int(getattr(mn, "max_age_days", 14) or 14),
       cache_hours=0,
       cache_file=str(getattr(mn, "cache_file", "data/macro_news_cache.json")),
       timeout=float(getattr(mn, "request_timeout_seconds", 20) or 20),
