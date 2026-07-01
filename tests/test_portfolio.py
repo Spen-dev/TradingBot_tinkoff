@@ -2,6 +2,7 @@
 from unittest.mock import MagicMock
 
 import pytest
+from t_tech.invest import OrderDirection
 
 from tinkoff_bot.config import PortfolioConfig, RiskConfig, InstrumentConfig
 from tinkoff_bot.portfolio import PortfolioManager
@@ -79,6 +80,54 @@ def test_target_values_ignores_prices_with_rebalance_by_price(portfolio_cfg, ris
     targets = pm._target_values(100_000.0, prices)
     assert abs(targets["F1"] - 50_000.0) < 1.0
     assert abs(targets["F2"] - 50_000.0) < 1.0
+
+
+def test_sell_capped_at_held_quantity(portfolio_cfg, risk_cfg, monkeypatch):
+  """SELL не больше фактической лонг-позиции (защита от шорта в sandbox)."""
+  monkeypatch.setattr("tinkoff_bot.portfolio.load_learned_params", lambda: {})
+  monkeypatch.setattr("tinkoff_bot.portfolio._load_position_peaks", lambda: {})
+  monkeypatch.setattr("tinkoff_bot.portfolio._load_last_trades", lambda: {})
+  monkeypatch.setattr(
+    "tinkoff_bot.advisor_ensemble.resolve_rebalance_advisor_flags",
+    lambda **kw: (False, False, False, False),
+  )
+  cfg = PortfolioConfig(
+    **{
+      **portfolio_cfg.__dict__,
+      "aggressive_rebalance": True,
+      "signal_confirmation_candles": 0,
+      "use_moex_advisor": False,
+      "use_finam_advisor": False,
+      "use_openrouter_advisor": False,
+      "gap_risk_enabled": False,
+    }
+  )
+  instruments = [
+    InstrumentConfig(
+      figi="F1", ticker="A", strategy=None, target_weight=0.1,
+      strategy_params={}, lot=1,
+    ),
+    InstrumentConfig(
+      figi="F2", ticker="B", strategy=None, target_weight=0.9,
+      strategy_params={}, lot=1,
+    ),
+  ]
+  broker = MagicMock()
+  pos = MagicMock()
+  pos.value = 80_000.0
+  pos.quantity = 50
+  pos.current_price = 100.0
+  pos.average_price = 100.0
+  broker.get_equity_snapshot.return_value = (100_000.0, 20_000.0, {"F1": pos})
+  broker.get_last_price.return_value = 100.0
+  broker.get_historical_candles.return_value = None
+
+  risk = RiskManager(risk_cfg)
+  pm = PortfolioManager(cfg, instruments, broker, risk)
+  orders = pm.build_rebalance_orders(100_000.0)
+  sells = [o for o in orders if o.direction == OrderDirection.ORDER_DIRECTION_SELL]
+  assert len(sells) == 1
+  assert sells[0].quantity == 50
 
 
 def test_rebalance_needed_uses_config_weights_not_prices(portfolio_cfg, risk_cfg, instruments):

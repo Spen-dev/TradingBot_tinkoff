@@ -680,6 +680,12 @@ class PortfolioManager:
       max_lots_per_order = (cfg.strategy_params or {}).get("max_lots_per_order", 0) or 0
       if max_lots_per_order > 0:
         qty = min(qty, max_lots_per_order * lot)
+      if direction == OrderDirection.ORDER_DIRECTION_SELL:
+        held_qty = int(pos.quantity) if pos and pos.quantity > 0 else 0
+        max_sell = int(math.floor(held_qty / lot)) * lot
+        if max_sell < lot:
+          continue
+        qty = min(qty, max_sell)
       if qty < lot:
         continue
       cost = qty * price
@@ -785,6 +791,23 @@ class PortfolioManager:
           logger.warning("Пропуск заявки %s: недостаточно кэша (доступно %.2f %s, минимум на 1 лот ≈ %.2f)", o.ticker, available_cash, base_currency, price * lot)
           continue
         qty = min(qty, max_qty)
+      elif o.direction == OrderDirection.ORDER_DIRECTION_SELL:
+        lot = getattr(self.instruments_cfg.get(o.figi), "lot", 1) or 1
+        try:
+          _, _, snap = self.broker.get_equity_snapshot(base_currency)
+          held = snap.get(o.figi)
+          held_qty = int(held.quantity) if held and held.quantity > 0 else 0
+          max_sell = int(math.floor(held_qty / lot)) * lot
+          if max_sell < lot:
+            logger.warning(
+              "Пропуск SELL %s: нет лонг-позиции (held=%d, lot=%d)",
+              o.ticker, held_qty, lot,
+            )
+            continue
+          qty = min(qty, max_sell)
+        except Exception as e:
+          logger.warning("Пропуск SELL %s: не удалось проверить позицию (%s)", o.ticker, e)
+          continue
       # Обновляем цену перед выставлением: лимит считаем от текущей цены.
       # При включённом флаге use_order_book_for_limits используем стакан (bid/ask/mid).
       use_ob = getattr(self.cfg, "use_order_book_for_limits", False)
