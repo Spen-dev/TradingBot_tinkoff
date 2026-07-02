@@ -88,16 +88,16 @@ portfolio:
   alert_drawdown_pct: 0.05     # Алерт при просадке портфеля >= N% (0=выкл)
   alert_daily_loss_pct: 0.02   # Алерт при дневном убытке >= N% от старта дня (0=выкл)
   alert_live_ping_hours: 24    # Раз в N ч отправлять «Робот работает» (песочница как в бою)
-  use_finam_advisor: true      # quant-советники на ребалансе (веса/сигналы)
-  use_moex_advisor: true
-  use_openrouter_advisor: true  # LLM в гонке с MOEX/Finam на ребалансе
+  use_finam_advisor: true      # quant на ребалансе (Finam; MOEX — только fallback данных)
+  use_moex_advisor: false       # не отдельный голос pick_best (MOEX ISS — fallback в CompositeMarketClient)
+  use_openrouter_advisor: true  # LLM в гонке с quant на ребалансе
   pick_best_advisor: true
   ai_mode: false
-  advisor_ai_priority: true       # приоритет AI при pick_best (macro/llm vs MOEX/Finam)
+  advisor_ai_priority: false    # macro без бонуса к score до доказанной пользы
   allow_ai_in_strategy_selection: true  # ai в автовыборе стратегии (бэктест vs quant)
   openrouter_model: "google/gemini-2.5-flash-lite"  # для macro-советника
   llm_cache_hours: 12.0        # кэш LLM (часы); 12ч ≈ 2 проверки macro/день, меньше расход OpenRouter
-  llm_history_days: 14         # контекст для macro
+  llm_history_days: 90         # единый горизонт macro summary и quant/pick_best
   auto_strategy_selection_on_start: true
   strategy_selection_days: 90
   strategy_selection_interval_days: 14
@@ -107,7 +107,7 @@ portfolio:
   log_retention_days: 45        # хранить ротированные bot.log.* (дней); автоочистка раз в сутки
   aggressive_rebalance: false  # боевой режим: не ослаблять фильтры ради частых сделок
 
-# Динамический состав: macro (LLM) + MOEX/Finam → pick_best; исполнение — adaptive
+# Динамический состав: macro (LLM) + Finam quant → pick_best; MOEX ISS — fallback данных
 dynamic_portfolio:
   enabled: true
   refresh_interval_days: 7
@@ -117,9 +117,23 @@ dynamic_portfolio:
   default_strategy: adaptive
   fallback_to_static: true
   use_finam: true
-  use_moex: true
+  use_moex: false              # не участвует в pick_best если Finam настроен
+  prefer_finam_over_moex: true
   use_macro: true              # RSS + LLM
-  pick_best_advisor: true      # macro vs quant — лучший по Sharpe
+  pick_best_advisor: true      # macro vs quant — walk-forward Sharpe
+  portfolio_history_days: 90
+  weight_change_threshold: 0.03  # смена состава только при Δweight > 3%
+  pick_best_min_score_delta: 0.10  # hysteresis: не менять советника без отрыва
+  min_hold_days: 3               # не выкидывать тикер раньше N дней
+  macro_quant_gate_epsilon: 0.05 # macro только если не сильно хуже median quant
+  max_sector_weight: 0.40
+  min_avg_daily_volume: 0        # 0 = выкл; фильтр ликвидности по avg volume
+  max_pair_correlation: 0.75
+  walk_forward_train_days: 60
+  walk_forward_test_days: 20
+  turnover_penalty: 2.0
+  drawdown_penalty: 50.0
+  rebalance_on_refresh: true     # внеплановый ребаланс после смены состава
   candidates:
     - SBER
     - LKOH
@@ -161,6 +175,18 @@ ops:
   openrouter_balance_check_hours: 24
   macro_refresh_on_index_drop_pct: 0.03 # вне 7-дн. цикла: обновить портфель при падении индекса (в торговом окне)
   macro_refresh_on_news_change: true    # RSS: раз в торговый день при входе в окно rebalance_time…window_end
+  macro_news_trigger_keywords:        # refresh только если в заголовках есть ключевые слова
+    - "ставк"
+    - "цб"
+    - "санкц"
+    - "нефт"
+    - "oil"
+    - "brent"
+    - "opec"
+    - "imoex"
+    - "moex"
+    - "геополит"
+  macro_news_refresh_cooldown_days: 3  # не чаще N дней по новостям
   # macro_news_check_hours — устарело, интервал не используется (проверка только в торговом окне)
   macro_news_check_hours: 0
   learned_params_backup_interval_hours: 24

@@ -15,7 +15,7 @@ def main() -> None:
   if not dp or not dp.enabled:
     print("dynamic_portfolio disabled")
     return
-  inst, msg, changed, comparison = refresh_dynamic_portfolio(
+  inst, msg, changed, comparison, turnover = refresh_dynamic_portfolio(
     dp,
     broker,
     cfg.instruments,
@@ -31,7 +31,7 @@ def main() -> None:
   print(msg)
   if comparison:
     print(comparison)
-  print("changed:", changed)
+  print("changed:", changed, "turnover:", f"{turnover:.0%}")
   for i in inst:
     print(f"  {i.ticker} {i.target_weight:.1%}")
 

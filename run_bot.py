@@ -113,34 +113,42 @@ async def main() -> None:
   rebalance_lock = asyncio.Lock()
 
   fallback_alert_last_date: date | None = None
+  portfolio_rebalance_pending: bool = False
 
   async def apply_dynamic_portfolio(force: bool = False, notify: bool = False) -> tuple[str, str]:
-    nonlocal fallback_alert_last_date
+    nonlocal fallback_alert_last_date, portfolio_rebalance_pending
     if not dp_cfg or not dp_cfg.enabled:
       return "Динамический портфель отключён (dynamic_portfolio.enabled=false).", ""
     from tinkoff_bot.dynamic_portfolio import refresh_dynamic_portfolio
     loop = asyncio.get_running_loop()
+    hist_days = int(getattr(dp_cfg, "portfolio_history_days", None) or getattr(cfg.portfolio, "llm_history_days", 90) or 90)
     try:
-      instruments, msg, changed, comparison = await loop.run_in_executor(
+      instruments, msg, changed, comparison, turnover = await loop.run_in_executor(
         None,
         lambda: refresh_dynamic_portfolio(
           dp_cfg,
           broker,
           static_instruments,
           force=force,
-          history_days=getattr(cfg.portfolio, "llm_history_days", 10) or 10,
+          history_days=hist_days,
           openrouter_model=getattr(cfg.portfolio, "openrouter_model", "google/gemini-2.5-flash-lite"),
           base_dir=base_dir,
           finam_cfg=getattr(cfg, "finam", None),
           openrouter_cfg=getattr(cfg, "openrouter", None),
           macro_news_cfg=getattr(cfg, "macro_news", None),
           ai_mode=bool(getattr(cfg.portfolio, "ai_mode", False)),
-          ai_priority=bool(getattr(cfg.portfolio, "advisor_ai_priority", True)),
+          ai_priority=bool(getattr(cfg.portfolio, "advisor_ai_priority", False)),
+          market_index_figi=getattr(cfg.portfolio, "market_index_figi", "") or "",
         ),
       )
     except Exception as e:
       logger.exception("dynamic_portfolio: %s", e)
       return f"Ошибка обновления состава: {e}", ""
+    portfolio_rebalance_pending = (
+      bool(changed)
+      and bool(getattr(dp_cfg, "rebalance_on_refresh", True))
+      and float(turnover or 0) >= 0.03
+    )
     if instruments:
       # Меняем состав под тем же локом, что и ребаланс — иначе заявки могут уйти по уже устаревшему составу.
       async with rebalance_lock:
@@ -841,7 +849,7 @@ async def main() -> None:
     Любые ошибки внутри планировщика логируются, чтобы задача не умирала молча.
     """
     logger.info("auto_rebalance_scheduler: задача запущена")
-    nonlocal last_trade_time, day_start_equity, last_live_ping, no_trades_alert_for_last_trade_ts
+    nonlocal last_trade_time, day_start_equity, last_live_ping, no_trades_alert_for_last_trade_ts, portfolio_rebalance_pending
     rebalance_time = getattr(cfg.portfolio, "rebalance_time", "10:00")
     try:
       parts = [p for p in str(rebalance_time).strip().split(":") if p.strip() != ""]
@@ -1223,6 +1231,8 @@ async def main() -> None:
                     macro_news_cfg,
                     base_dir=base_dir,
                     refresh_on_news_change=ops_cfg.macro_refresh_on_news_change,
+                    trigger_keywords=getattr(ops_cfg, "macro_news_trigger_keywords", None),
+                    refresh_cooldown_days=int(getattr(ops_cfg, "macro_news_refresh_cooldown_days", 3) or 3),
                   ),
                 )
                 if do_refresh:
@@ -1242,6 +1252,19 @@ async def main() -> None:
                   logger.warning("dynamic_portfolio (планировщик): %s", e)
               else:
                 logger.debug("dynamic_portfolio (планировщик): пропуск — уже обновлён по новостям")
+            if portfolio_rebalance_pending and _can_auto_rebalance() and not panic_today:
+              portfolio_rebalance_pending = False
+              logger.info("Ребаланс после обновления состава портфеля")
+              try:
+                outcome = await on_rebalance("portfolio_refresh")
+                await send_alert(
+                  tg,
+                  f"🔄 Ребаланс после смены состава: {outcome.message}",
+                  "rebalance_portfolio_refresh",
+                  force=True,
+                )
+              except Exception as e:
+                logger.warning("rebalance after portfolio refresh: %s", e)
           if last_day_reset_date is None and day_start_equity is not None:
             last_day_reset_date = today
           interval_sched_due = ri_hours > 0 and (

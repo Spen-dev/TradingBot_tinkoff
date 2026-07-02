@@ -71,9 +71,23 @@ class DynamicPortfolioConfig:
   fallback_to_static: bool = True
   state_file: str = "data/dynamic_portfolio.json"
   use_finam: bool = True
-  use_moex: bool = True
+  use_moex: bool = False
   use_macro: bool = True
   pick_best_advisor: bool = True
+  prefer_finam_over_moex: bool = True
+  portfolio_history_days: int = 90
+  weight_change_threshold: float = 0.03
+  pick_best_min_score_delta: float = 0.10
+  min_hold_days: int = 3
+  macro_quant_gate_epsilon: float = 0.05
+  max_sector_weight: float = 0.40
+  min_avg_daily_volume: float = 0.0
+  max_pair_correlation: float = 0.75
+  walk_forward_train_days: int = 60
+  walk_forward_test_days: int = 20
+  turnover_penalty: float = 2.0
+  drawdown_penalty: float = 50.0
+  rebalance_on_refresh: bool = True
 
 
 @dataclass
@@ -101,6 +115,10 @@ class OpsConfig:
   macro_refresh_on_index_drop_pct: float = 0.03
   macro_refresh_on_news_change: bool = True
   macro_news_check_hours: float = 0.0  # устарело: проверка RSS — раз в торговый день в окне ребаланса
+  macro_news_trigger_keywords: List[str] = field(default_factory=lambda: [
+    "ставк", "цб", "санкц", "нефт", "oil", "brent", "opec", "imoex", "moex", "геополит",
+  ])
+  macro_news_refresh_cooldown_days: int = 3
   learned_params_backup_interval_hours: float = 24.0
   watchdog_exit_after_failures: int = 3
   bug_audit_enabled: bool = True
@@ -208,15 +226,16 @@ class PortfolioConfig:
   alert_daily_loss_pct: float = 0.0  # алерт при дневном убытке >= N% от старта дня (0 = выкл)
   alert_live_ping_hours: float = 0.0  # раз в N часов отправлять «Робот работает» (0 = выкл)
   use_finam_advisor: bool = False  # Finam Trade API: количественные сигналы
-  use_moex_advisor: bool = True  # MOEX ISS: бесплатные количественные сигналы
+  use_moex_advisor: bool = False  # MOEX ISS fallback в CompositeMarketClient, не отдельный голос
   use_openrouter_advisor: bool = True  # OpenRouter LLM
   pick_best_advisor: bool = True  # выбрать лучший советник
   ai_mode: bool = False  # strategy=ai + LLM primary; MOEX/Finam — fallback
-  advisor_ai_priority: bool = True  # LLM/macro + бонус при pick_best vs MOEX/Finam
+  advisor_ai_priority: bool = False  # LLM/macro + бонус при pick_best vs quant
   allow_ai_in_strategy_selection: bool = True  # ai в автовыборе стратегии (бэктест)
   openrouter_model: str = "google/gemini-2.5-flash-lite"
   llm_cache_hours: float = 4.0  # кэш LLM-советников (часы)
-  llm_history_days: int = 10  # дней истории в контексте LLM (доходность, волатильность)
+  llm_history_days: int = 90  # единый горизонт macro summary и quant
+  portfolio_history_days: int = 90  # дублирует dynamic_portfolio; fallback если dp не задан
   auto_strategy_selection_on_start: bool = False
   strategy_selection_days: int = 90
   strategy_selection_interval_days: int = 0
@@ -424,9 +443,23 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     fallback_to_static=bool(dp_raw.get("fallback_to_static", True)),
     state_file=str(dp_raw.get("state_file", "data/dynamic_portfolio.json") or "data/dynamic_portfolio.json"),
     use_finam=bool(dp_raw.get("use_finam", True)),
-    use_moex=bool(dp_raw.get("use_moex", True)),
+    use_moex=bool(dp_raw.get("use_moex", False)),
     use_macro=bool(dp_raw.get("use_macro", True)),
     pick_best_advisor=bool(dp_raw.get("pick_best_advisor", True)),
+    prefer_finam_over_moex=bool(dp_raw.get("prefer_finam_over_moex", True)),
+    portfolio_history_days=int(dp_raw.get("portfolio_history_days", 90) or 90),
+    weight_change_threshold=float(dp_raw.get("weight_change_threshold", 0.03) or 0.03),
+    pick_best_min_score_delta=float(dp_raw.get("pick_best_min_score_delta", 0.10) or 0.10),
+    min_hold_days=int(dp_raw.get("min_hold_days", 3) or 3),
+    macro_quant_gate_epsilon=float(dp_raw.get("macro_quant_gate_epsilon", 0.05) or 0.05),
+    max_sector_weight=float(dp_raw.get("max_sector_weight", 0.40) or 0.40),
+    min_avg_daily_volume=float(dp_raw.get("min_avg_daily_volume", 0) or 0),
+    max_pair_correlation=float(dp_raw.get("max_pair_correlation", 0.75) or 0.75),
+    walk_forward_train_days=int(dp_raw.get("walk_forward_train_days", 60) or 60),
+    walk_forward_test_days=int(dp_raw.get("walk_forward_test_days", 20) or 20),
+    turnover_penalty=float(dp_raw.get("turnover_penalty", 2.0) or 2.0),
+    drawdown_penalty=float(dp_raw.get("drawdown_penalty", 50.0) or 50.0),
+    rebalance_on_refresh=bool(dp_raw.get("rebalance_on_refresh", True)),
   )
 
   from .news_client import DEFAULT_RSS_URLS
@@ -481,6 +514,12 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     macro_refresh_on_index_drop_pct=float(op_raw.get("macro_refresh_on_index_drop_pct", 0.03) or 0.03),
     macro_refresh_on_news_change=bool(op_raw.get("macro_refresh_on_news_change", True)),
     macro_news_check_hours=float(op_raw.get("macro_news_check_hours", 0.0) or 0.0),
+    macro_news_trigger_keywords=[
+      str(k).lower() for k in (op_raw.get("macro_news_trigger_keywords") or [
+        "ставк", "цб", "санкц", "нефт", "oil", "brent", "opec", "imoex", "moex", "геополит",
+      ]) if k
+    ],
+    macro_news_refresh_cooldown_days=int(op_raw.get("macro_news_refresh_cooldown_days", 3) or 3),
     learned_params_backup_interval_hours=float(op_raw.get("learned_params_backup_interval_hours", 24.0) or 24.0),
     watchdog_exit_after_failures=int(op_raw.get("watchdog_exit_after_failures", 3) or 3),
     bug_audit_enabled=bool(op_raw.get("bug_audit_enabled", True)),

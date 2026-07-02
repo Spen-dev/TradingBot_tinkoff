@@ -82,6 +82,8 @@ def _portfolio_daily_returns(
   client: CompositeMarketClient,
   selections: List[Dict[str, Any]],
   history_days: int = 90,
+  *,
+  max_bars: Optional[int] = None,
 ) -> List[float]:
   """Взвешенная дневная доходность портфеля по историческим свечам."""
   if not selections:
@@ -102,7 +104,8 @@ def _portfolio_daily_returns(
       continue
   if not series or min_len <= 0 or min_len >= 10**9:
     return []
-  min_len = min(min_len, 60)
+  cap = max_bars if max_bars is not None else history_days
+  min_len = min(min_len, max(5, cap))
   port_rets: List[float] = []
   for i in range(-min_len, 0):
     day_ret = 0.0
@@ -116,20 +119,143 @@ def _portfolio_daily_returns(
   return port_rets
 
 
+def _portfolio_max_drawdown_from_returns(rets: List[float]) -> float:
+  if not rets:
+    return 0.0
+  equity = 1.0
+  peak = 1.0
+  max_dd = 0.0
+  for r in rets:
+    equity *= 1.0 + r
+    peak = max(peak, equity)
+    if peak > 0:
+      max_dd = max(max_dd, (peak - equity) / peak)
+  return max_dd
+
+
+def compute_portfolio_turnover(
+  old_selections: List[Dict[str, Any]],
+  new_selections: List[Dict[str, Any]],
+) -> float:
+  """Сумма |Δweight| / 2 — доля портфеля, которую нужно переложить."""
+  old_w = {s["ticker"].upper(): float(s.get("target_weight", 0)) for s in old_selections}
+  new_w = {s["ticker"].upper(): float(s.get("target_weight", 0)) for s in new_selections}
+  tickers = set(old_w) | set(new_w)
+  delta = sum(abs(new_w.get(t, 0.0) - old_w.get(t, 0.0)) for t in tickers)
+  return delta / 2.0
+
+
 def score_portfolio_proposal(
   client: CompositeMarketClient,
   selections: List[Dict[str, Any]],
   history_days: int = 90,
+  *,
+  walk_forward_train_days: int = 60,
+  walk_forward_test_days: int = 20,
+  previous_selections: Optional[List[Dict[str, Any]]] = None,
+  turnover_penalty: float = 2.0,
+  drawdown_penalty: float = 50.0,
 ) -> float:
-  """Sharpe портфеля на истории (выше — лучше)."""
-  rets = _portfolio_daily_returns(client, selections, history_days)
+  """Out-of-sample Sharpe на test-окне + штрафы за просадку и turnover."""
+  rets = _portfolio_daily_returns(client, selections, history_days, max_bars=history_days)
   if len(rets) < 5:
     return -1e9
   from .quant_advisor import _compute_sharpe
 
-  sharpe = _compute_sharpe(rets)
-  mean = sum(rets) / len(rets)
-  return sharpe + mean * 10
+  need = walk_forward_train_days + walk_forward_test_days
+  if len(rets) >= need:
+    test_rets = rets[-walk_forward_test_days:]
+  else:
+    test_rets = rets[-min(max(5, walk_forward_test_days), len(rets)) :]
+  sharpe = _compute_sharpe(test_rets)
+  mean = sum(test_rets) / len(test_rets)
+  score = sharpe + mean * 10
+  score -= _portfolio_max_drawdown_from_returns(test_rets) * drawdown_penalty
+  if previous_selections:
+    turnover = compute_portfolio_turnover(previous_selections, selections)
+    score -= turnover * turnover_penalty
+  return score
+
+
+def score_all_proposals(
+  proposals: List[Tuple[str, List[Dict[str, Any]], str]],
+  market_client: CompositeMarketClient,
+  *,
+  history_days: int = 90,
+  ai_priority: bool = False,
+  previous_selections: Optional[List[Dict[str, Any]]] = None,
+  walk_forward_train_days: int = 60,
+  walk_forward_test_days: int = 20,
+  turnover_penalty: float = 2.0,
+  drawdown_penalty: float = 50.0,
+) -> Dict[str, Dict[str, float]]:
+  """{source: {raw, adj}} для всех proposal."""
+  out: Dict[str, Dict[str, float]] = {}
+  score_kwargs = {
+    "walk_forward_train_days": walk_forward_train_days,
+    "walk_forward_test_days": walk_forward_test_days,
+    "previous_selections": previous_selections,
+    "turnover_penalty": turnover_penalty,
+    "drawdown_penalty": drawdown_penalty,
+  }
+  for name, sel, _summary in proposals:
+    if not sel:
+      continue
+    if market_client.configured:
+      raw = score_portfolio_proposal(market_client, sel, history_days, **score_kwargs)
+    else:
+      raw = sum(float(s.get("target_weight", 0)) for s in sel)
+    adj = _advisor_score_with_ai_priority(name, raw, ai_priority)
+    out[name] = {"raw": raw, "adj": adj}
+    logger.info("Advisor %s: score=%.4f adj=%.4f n=%d", name, raw, adj, len(sel))
+  return out
+
+
+def apply_macro_quant_gate(
+  winner: str,
+  selections: List[Dict[str, Any]],
+  summary: str,
+  scores: Dict[str, Dict[str, float]],
+  proposals: List[Tuple[str, List[Dict[str, Any]], str]],
+  *,
+  epsilon: float = 0.05,
+) -> Tuple[str, List[Dict[str, Any]], str]:
+  """Macro побеждает только если не сильно хуже median quant (без AI-бонуса)."""
+  if winner != "macro" or epsilon < 0:
+    return winner, selections, summary
+  quant_raw = [scores[n]["raw"] for n in ("finam", "moex") if n in scores]
+  if not quant_raw:
+    return winner, selections, summary
+  quant_raw.sort()
+  median = quant_raw[len(quant_raw) // 2]
+  macro_raw = scores.get("macro", {}).get("raw", -1e18)
+  if macro_raw >= median - epsilon:
+    return winner, selections, summary
+  best_quant = ""
+  best_raw = -1e18
+  best_sel: List[Dict[str, Any]] = []
+  best_summary = ""
+  for name, sel, sm in proposals:
+    if name not in ("finam", "moex") or not sel:
+      continue
+    raw = scores.get(name, {}).get("raw", -1e18)
+    if raw > best_raw:
+      best_raw = raw
+      best_quant = name
+      best_sel = sel
+      best_summary = sm
+  if not best_quant:
+    return winner, selections, summary
+  logger.info(
+    "macro quant-gate: macro raw=%.3f < median quant=%.3f — fallback %s",
+    macro_raw,
+    median,
+    best_quant,
+  )
+  msg = f"Macro отклонён quant-gate (raw {macro_raw:.3f} < median {median:.3f}), выбран {best_quant}"
+  if best_summary:
+    msg += f". {best_summary}"
+  return best_quant, best_sel, msg
 
 
 def pick_best_portfolio(
@@ -137,39 +263,82 @@ def pick_best_portfolio(
   market_client: CompositeMarketClient,
   history_days: int = 90,
   ai_priority: bool = False,
-) -> Tuple[str, List[Dict[str, Any]], str, float]:
+  *,
+  previous_source: str = "",
+  min_score_delta: float = 0.0,
+  previous_selections: Optional[List[Dict[str, Any]]] = None,
+  walk_forward_train_days: int = 60,
+  walk_forward_test_days: int = 20,
+  turnover_penalty: float = 2.0,
+  drawdown_penalty: float = 50.0,
+  macro_quant_gate_epsilon: float = 0.05,
+) -> Tuple[str, List[Dict[str, Any]], str, float, Dict[str, Dict[str, float]]]:
   """
   proposals: [(source_name, selections, summary), ...]
-  Возвращает (winner_source, selections, message, score).
+  Возвращает (winner_source, selections, message, score, all_scores).
   """
-  best_name = ""
+  scores = score_all_proposals(
+    proposals,
+    market_client,
+    history_days=history_days,
+    ai_priority=ai_priority,
+    previous_selections=previous_selections,
+    walk_forward_train_days=walk_forward_train_days,
+    walk_forward_test_days=walk_forward_test_days,
+    turnover_penalty=turnover_penalty,
+    drawdown_penalty=drawdown_penalty,
+  )
+  if not scores:
+    return "", [], "Нет предложений от советников", -1e18, {}
+
+  ranked = sorted(scores.items(), key=lambda kv: -kv[1]["adj"])
+  best_name = ranked[0][0]
+  best_score = ranked[0][1]["adj"]
+
+  if (
+    previous_source
+    and min_score_delta > 0
+    and previous_source in scores
+    and best_name != previous_source
+  ):
+    prev_score = scores[previous_source]["adj"]
+    if best_score - prev_score < min_score_delta:
+      logger.info(
+        "pick_best hysteresis: keep %s (delta %.4f < %.4f)",
+        previous_source,
+        best_score - prev_score,
+        min_score_delta,
+      )
+      best_name = previous_source
+      best_score = prev_score
+
   best_sel: List[Dict[str, Any]] = []
   best_summary = ""
-  best_score = -1e18
-
   for name, sel, summary in proposals:
-    if not sel:
-      continue
-    if market_client.configured:
-      score = score_portfolio_proposal(market_client, sel, history_days)
-    else:
-      score = sum(float(s.get("target_weight", 0)) for s in sel)
-    adj = _advisor_score_with_ai_priority(name, score, ai_priority)
-    logger.info("Advisor %s: score=%.4f adj=%.4f n=%d", name, score, adj, len(sel))
-    if adj > best_score:
-      best_score = adj
-      best_name = name
+    if name == best_name:
       best_sel = sel
       best_summary = summary
+      break
+
+  best_name, best_sel, best_summary = apply_macro_quant_gate(
+    best_name,
+    best_sel,
+    best_summary,
+    scores,
+    proposals,
+    epsilon=macro_quant_gate_epsilon,
+  )
+  if best_name in scores:
+    best_score = scores[best_name]["adj"]
 
   if not best_name:
-    return "", [], "Нет предложений от советников", best_score
+    return "", [], "Нет предложений от советников", best_score, scores
 
   tickers = ", ".join(f"{s['ticker']} {s['target_weight']:.0%}" for s in best_sel)
   msg = f"Выбран {best_name} (score={best_score:.3f}): {tickers}"
   if best_summary:
     msg += f". {best_summary}"
-  return best_name, best_sel, msg, best_score
+  return best_name, best_sel, msg, best_score, scores
 
 
 def _proposal_tickers_line(sel: List[Dict[str, Any]], limit: int = 6) -> str:
@@ -183,11 +352,13 @@ def _proposal_score(
   market_client: CompositeMarketClient,
   history_days: int,
   ai_priority: bool,
+  score_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Tuple[float, float]:
   if not sel:
     return 0.0, 0.0
+  kwargs = score_kwargs or {}
   if market_client.configured:
-    raw = score_portfolio_proposal(market_client, sel, history_days)
+    raw = score_portfolio_proposal(market_client, sel, history_days, **kwargs)
   else:
     raw = sum(float(s.get("target_weight", 0)) for s in sel)
   adj = _advisor_score_with_ai_priority(name, raw, ai_priority)
@@ -201,25 +372,31 @@ def format_advisor_pick_comparison(
   *,
   history_days: int = 90,
   ai_priority: bool = False,
+  proposal_scores: Optional[Dict[str, Dict[str, float]]] = None,
+  score_kwargs: Optional[Dict[str, Any]] = None,
 ) -> str:
-  """Текст для Telegram: сравнение macro / moex / finam и победитель pick_best."""
+  """Текст для Telegram: сравнение macro / quant и победитель pick_best."""
   labels = {"macro": "Macro (RSS+LLM)", "moex": "MOEX", "finam": "Finam"}
   if not proposals:
     return ""
 
   scored: List[Tuple[str, float, float, str, str]] = []
   for name, sel, summary in proposals:
-    raw, adj = _proposal_score(name, sel, market_client, history_days, ai_priority)
+    if proposal_scores and name in proposal_scores:
+      raw = proposal_scores[name]["raw"]
+      adj = proposal_scores[name]["adj"]
+    else:
+      raw, adj = _proposal_score(name, sel, market_client, history_days, ai_priority, score_kwargs)
     tickers = _proposal_tickers_line(sel) if sel else "—"
     scored.append((name, raw, adj, tickers, summary or ""))
   scored.sort(key=lambda row: -row[2])
 
-  lines = ["📊 Macro vs MOEX (pick_best по Sharpe):"]
+  lines = ["📊 Macro vs Quant (walk-forward Sharpe):"]
   for name, raw, adj, tickers, summary in scored:
     label = labels.get(name, name)
     mark = "✅" if name == winner else "·"
     if market_client.configured:
-      lines.append(f"{mark} {label}: adj={adj:.3f} (raw={raw:.3f})")
+      lines.append(f"{mark} {label}: adj={adj:.3f} (oos={raw:.3f})")
     else:
       lines.append(f"{mark} {label}: score={adj:.3f}")
     lines.append(f"   {tickers}")
@@ -228,7 +405,7 @@ def format_advisor_pick_comparison(
       if short:
         lines.append(f"   {short}")
 
-  missing = [labels.get(k, k) for k in ("macro", "moex") if k not in {p[0] for p in proposals}]
+  missing = [labels.get(k, k) for k in ("macro", "finam") if k not in {p[0] for p in proposals}]
   if missing:
     lines.append(f"   (нет предложения: {', '.join(missing)})")
 

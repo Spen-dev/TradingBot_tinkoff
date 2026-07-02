@@ -76,8 +76,10 @@ def should_refresh_portfolio_for_news(
   base_dir: Path,
   refresh_on_news_change: bool = True,
   force_refresh: bool = False,
+  trigger_keywords: Optional[List[str]] = None,
+  refresh_cooldown_days: int = 3,
 ) -> tuple[bool, str]:
-  """True, если RSS изменился с прошлого macro-refresh."""
+  """True, если RSS изменился и есть значимые ключевые слова (с cooldown)."""
   if force_refresh:
     return True, "force"
   if not refresh_on_news_change:
@@ -103,10 +105,37 @@ def should_refresh_portfolio_for_news(
   if not prev:
     save_news_fingerprint(state_path, fp, len(headlines))
     return False, "initial_fingerprint"
-  if fp != prev:
-    save_news_fingerprint(state_path, fp, len(headlines))
-    return True, f"news_changed ({len(headlines)} headlines)"
-  return False, "news_unchanged"
+  if fp == prev:
+    return False, "news_unchanged"
+
+  keywords = [k.lower() for k in (trigger_keywords or []) if k]
+  if keywords:
+    blob = " ".join(
+      f"{h.get('title', '')} {h.get('description', '')}".lower() for h in headlines
+    )
+    if not any(k in blob for k in keywords):
+      save_news_fingerprint(state_path, fp, len(headlines))
+      return False, "news_changed_no_keywords"
+
+  if refresh_cooldown_days > 0 and state_path.exists():
+    try:
+      data = json.loads(state_path.read_text(encoding="utf-8"))
+      last_refresh = str(data.get("last_refresh_at") or "")
+      if last_refresh:
+        last_dt = datetime.fromisoformat(last_refresh)
+        if (datetime.now() - last_dt).days < refresh_cooldown_days:
+          return False, f"cooldown_{refresh_cooldown_days}d"
+    except Exception:
+      pass
+
+  save_news_fingerprint(state_path, fp, len(headlines))
+  try:
+    data = json.loads(state_path.read_text(encoding="utf-8"))
+  except Exception:
+    data = {"fingerprint": fp, "headline_count": len(headlines)}
+  data["last_refresh_at"] = datetime.now().isoformat()
+  state_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+  return True, f"news_changed ({len(headlines)} headlines)"
 
 
 def backup_learned_params(base_dir: Path) -> Optional[str]:

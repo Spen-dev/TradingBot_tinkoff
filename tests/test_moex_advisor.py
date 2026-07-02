@@ -60,6 +60,6 @@ def test_pick_best_with_moex_only_client():
   good = [{"ticker": "SBER", "target_weight": 0.6}, {"ticker": "LKOH", "target_weight": 0.4}]
   weak = [{"ticker": "GMKN", "target_weight": 1.0}]
   assert score_portfolio_proposal(market, good) > score_portfolio_proposal(market, weak)
-  name, sel, msg, _ = pick_best_portfolio([("moex", weak, "w"), ("finam", good, "g")], market)
+  name, sel, msg, _, _ = pick_best_portfolio([("moex", weak, "w"), ("finam", good, "g")], market)
   assert name == "finam"
   assert sel == good

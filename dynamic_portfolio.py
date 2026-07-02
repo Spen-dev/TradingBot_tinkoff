@@ -135,12 +135,19 @@ def save_state(
   instruments: List[InstrumentConfig],
   summary: str = "",
   advisor_source: str = "",
+  *,
+  proposal_scores: Optional[Dict[str, Dict[str, float]]] = None,
+  ticker_hold_since: Optional[Dict[str, str]] = None,
+  expected_turnover: float = 0.0,
 ) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
   payload = {
     "updated_at": datetime.now().isoformat(),
     "summary": summary,
     "advisor_source": advisor_source,
+    "expected_turnover": expected_turnover,
+    "proposal_scores": proposal_scores or {},
+    "ticker_hold_since": ticker_hold_since or {},
     "instruments": [
       {
         "figi": i.figi,
@@ -154,6 +161,91 @@ def save_state(
     ],
   }
   path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def selections_from_instruments(instruments: List[InstrumentConfig]) -> List[Dict[str, Any]]:
+  return [{"ticker": i.ticker.upper(), "target_weight": float(i.target_weight)} for i in instruments]
+
+
+def apply_min_hold(
+  new_sel: List[Dict[str, Any]],
+  old_sel: List[Dict[str, Any]],
+  hold_since: Dict[str, str],
+  min_hold_days: int,
+  max_instruments: int,
+) -> List[Dict[str, Any]]:
+  if min_hold_days <= 0 or not old_sel:
+    return new_sel
+  now = datetime.now()
+  new_by = {(s.get("ticker") or "").upper(): s for s in new_sel}
+  protected: List[Dict[str, Any]] = []
+  for old in old_sel:
+    ticker = (old.get("ticker") or "").upper()
+    if not ticker or ticker in new_by:
+      continue
+    since_str = hold_since.get(ticker, "")
+    if not since_str:
+      continue
+    try:
+      since = datetime.fromisoformat(since_str)
+    except Exception:
+      continue
+    if (now - since).days < min_hold_days:
+      protected.append(dict(old))
+  if not protected:
+    return new_sel
+  merged = [dict(s) for s in new_sel] + protected
+  merged.sort(key=lambda x: -float(x.get("target_weight", 0)))
+  merged = merged[: max(1, max_instruments)]
+  total = sum(float(s.get("target_weight", 0)) for s in merged) or 1.0
+  for s in merged:
+    s["target_weight"] = float(s.get("target_weight", 0)) / total
+  return merged
+
+
+def update_ticker_hold_since(
+  hold_since: Dict[str, str],
+  old_tickers: set,
+  new_tickers: set,
+) -> Dict[str, str]:
+  out = dict(hold_since or {})
+  now_iso = datetime.now().isoformat()
+  for t in new_tickers:
+    if t not in old_tickers:
+      out[t] = now_iso
+  for t in list(out):
+    if t not in new_tickers and t not in old_tickers:
+      del out[t]
+  return out
+
+
+def _fetch_index_bars(broker: Any, history_days: int, index_figi: str = "") -> Optional[List[Dict[str, float]]]:
+  if not index_figi or not broker:
+    return None
+  to_dt = datetime.now()
+  from_dt = to_dt - timedelta(days=max(30, history_days))
+  try:
+    df = broker.get_historical_candles(index_figi, from_dt, to_dt)
+    if df is None or len(df) < 10 or "close" not in df.columns:
+      return None
+    bars: List[Dict[str, float]] = []
+    for _, row in df.iterrows():
+      close = float(row["close"])
+      if close <= 0:
+        continue
+      bars.append(
+        {
+          "open": float(row.get("open", close)),
+          "high": float(row.get("high", close)),
+          "low": float(row.get("low", close)),
+          "close": close,
+          "volume": float(row.get("volume", 0) or 0),
+        }
+      )
+    return bars if len(bars) >= 10 else None
+  except Exception as e:
+    logger.debug("index bars: %s", e)
+    return None
 
 
 def instruments_from_state(state: dict) -> List[InstrumentConfig]:
@@ -222,14 +314,27 @@ def refresh_dynamic_portfolio(
   macro_news_cfg: Any = None,
   ai_mode: bool = False,
   ai_priority: bool = True,
-) -> Tuple[List[InstrumentConfig], str, bool, str]:
+  market_index_figi: str = "",
+) -> Tuple[List[InstrumentConfig], str, bool, str, float]:
   """
   Обновляет состав портфеля через все активные советники; при pick_best_advisor — лучший по бэктесту.
-  Возвращает (instruments, message, changed, advisor_comparison для Telegram).
+  Возвращает (instruments, message, changed, advisor_comparison, expected_turnover).
   """
   base = base_dir or Path(__file__).resolve().parent
   state_path = base / (dp.state_file or DEFAULT_STATE_FILE)
   state = load_state(state_path)
+  hist_days = max(history_days, int(getattr(dp, "portfolio_history_days", 90) or 90))
+  score_kwargs = {
+    "walk_forward_train_days": int(getattr(dp, "walk_forward_train_days", 60) or 60),
+    "walk_forward_test_days": int(getattr(dp, "walk_forward_test_days", 20) or 20),
+    "turnover_penalty": float(getattr(dp, "turnover_penalty", 2.0) or 2.0),
+    "drawdown_penalty": float(getattr(dp, "drawdown_penalty", 50.0) or 50.0),
+  }
+  quant_kwargs = {
+    "min_avg_volume": float(getattr(dp, "min_avg_daily_volume", 0) or 0),
+    "max_sector_weight": float(getattr(dp, "max_sector_weight", 0.40) or 0.40),
+    "max_pair_correlation": float(getattr(dp, "max_pair_correlation", 0.75) or 0.75),
+  }
 
   if not force and state and not is_refresh_needed(state, dp.refresh_interval_days):
     instruments = instruments_from_state(state)
@@ -237,23 +342,27 @@ def refresh_dynamic_portfolio(
       if ai_mode:
         instruments = apply_ai_strategy_to_instruments(instruments)
       updated = state.get("updated_at", "")[:16]
-      return instruments, f"Динамический портфель из кэша ({updated})", False, ""
+      return instruments, f"Динамический портфель из кэша ({updated})", False, "", 0.0
 
   candidates = get_candidates(dp, fallback_instruments)
   if not candidates:
-    return fallback_instruments, "Нет кандидатов для динамического портфеля", False, ""
+    return fallback_instruments, "Нет кандидатов для динамического портфеля", False, "", 0.0
 
   try:
     equity, _, _ = broker.get_equity_snapshot()
   except Exception:
     equity = 0.0
 
-  summary_map = build_candidate_summary(broker, candidates, history_days=history_days)
+  summary_map = build_candidate_summary(broker, candidates, history_days=hist_days)
 
   from .finam_client import FinamClient
   from .moex_client import MoexClient
   from . import finam_advisor, moex_advisor
-  from .advisor_ensemble import pick_best_portfolio, format_advisor_pick_comparison
+  from .advisor_ensemble import (
+    pick_best_portfolio,
+    format_advisor_pick_comparison,
+    compute_portfolio_turnover,
+  )
   from .market_data_client import CompositeMarketClient
 
   finam_client = FinamClient(
@@ -263,8 +372,12 @@ def refresh_dynamic_portfolio(
   )
   moex_client = MoexClient()
   market_client = CompositeMarketClient(finam_client=finam_client, moex_client=moex_client)
+  quant_kwargs["index_bars"] = _fetch_index_bars(broker, hist_days, market_index_figi)
 
   proposals: List[Tuple[str, List[Dict[str, Any]], str]] = []
+  old_selections = selections_from_instruments(instruments_from_state(state)) if state else []
+  hold_since = dict(state.get("ticker_hold_since") or {}) if state else {}
+  previous_source = str(state.get("advisor_source") or "") if state else ""
 
   if dp.use_macro and macro_news_cfg:
     from .macro_advisor import select_portfolio_via_macro
@@ -294,26 +407,33 @@ def refresh_dynamic_portfolio(
     else:
       logger.debug("macro advisor: OPENROUTER_API_KEY не задан")
 
-  if dp.use_finam and finam_client.configured:
+  use_quant_finam = bool(dp.use_finam and finam_client.configured)
+  use_quant_moex = bool(dp.use_moex and not (getattr(dp, "prefer_finam_over_moex", True) and use_quant_finam))
+  if not use_quant_finam and dp.use_moex:
+    use_quant_moex = True
+
+  if use_quant_finam:
     fm_sel, fm_summary = finam_advisor.select_portfolio_via_finam(
       finam_client,
       candidates,
       min_instruments=dp.min_instruments,
       max_instruments=dp.max_instruments,
       max_weight=dp.max_weight_per_instrument,
-      history_days=max(history_days, 60),
+      history_days=hist_days,
+      **quant_kwargs,
     )
     if fm_sel:
       proposals.append(("finam", fm_sel, fm_summary))
 
-  if dp.use_moex:
+  if use_quant_moex:
     mx_sel, mx_summary = moex_advisor.select_portfolio_via_moex(
       moex_client,
       candidates,
       min_instruments=dp.min_instruments,
       max_instruments=dp.max_instruments,
       max_weight=dp.max_weight_per_instrument,
-      history_days=max(history_days, 60),
+      history_days=hist_days,
+      **quant_kwargs,
     )
     if mx_sel:
       proposals.append(("moex", mx_sel, mx_summary))
@@ -321,6 +441,15 @@ def refresh_dynamic_portfolio(
   selections: List[Dict[str, Any]] = []
   advisor_source = ""
   combined_summary = ""
+  proposal_scores: Dict[str, Dict[str, float]] = {}
+
+  pick_kwargs = {
+    **score_kwargs,
+    "previous_selections": old_selections or None,
+    "previous_source": previous_source,
+    "min_score_delta": float(getattr(dp, "pick_best_min_score_delta", 0.10) or 0.0),
+    "macro_quant_gate_epsilon": float(getattr(dp, "macro_quant_gate_epsilon", 0.05) or 0.05),
+  }
 
   if not proposals:
     pass
@@ -329,11 +458,12 @@ def refresh_dynamic_portfolio(
     selections = proposals[0][1]
     combined_summary = proposals[0][2]
   else:
-    advisor_source, selections, combined_summary, _ = pick_best_portfolio(
+    advisor_source, selections, combined_summary, _, proposal_scores = pick_best_portfolio(
       proposals,
       market_client,
-      history_days=max(history_days, 60),
+      history_days=hist_days,
       ai_priority=ai_priority,
+      **pick_kwargs,
     )
 
   if not selections:
@@ -341,9 +471,20 @@ def refresh_dynamic_portfolio(
       msg = "Советники недоступны, используется статический конфиг ({0} инструментов)".format(len(fallback_instruments))
       if state and instruments_from_state(state):
         cached = instruments_from_state(state)
-        return cached, msg + " (кэш сохранён ранее)", False, ""
-      return fallback_instruments, msg, False, ""
-    return fallback_instruments, "Советники не вернули состав, изменений нет", False, ""
+        return cached, msg + " (кэш сохранён ранее)", False, "", 0.0
+      return fallback_instruments, msg, False, "", 0.0
+    return fallback_instruments, "Советники не вернули состав, изменений нет", False, "", 0.0
+
+  selections = apply_min_hold(
+    selections,
+    old_selections,
+    hold_since,
+    int(getattr(dp, "min_hold_days", 3) or 0),
+    dp.max_instruments,
+  )
+  if float(getattr(dp, "max_sector_weight", 0) or 0) > 0:
+    from .sector_map import enforce_sector_caps
+    selections = enforce_sector_caps(selections, float(dp.max_sector_weight))
 
   comparison = ""
   if proposals:
@@ -351,9 +492,13 @@ def refresh_dynamic_portfolio(
       proposals,
       advisor_source,
       market_client,
-      history_days=max(history_days, 60),
+      history_days=hist_days,
       ai_priority=ai_priority,
+      proposal_scores=proposal_scores or None,
+      score_kwargs={**score_kwargs, "previous_selections": old_selections or None},
     )
+
+  expected_turnover = compute_portfolio_turnover(old_selections, selections) if old_selections else 1.0
 
   instruments = instruments_from_selections(selections, broker, dp.default_strategy)
   if ai_mode:
@@ -363,25 +508,37 @@ def refresh_dynamic_portfolio(
     logger.warning("dynamic_portfolio: %s", msg)
     if dp.fallback_to_static and fallback_instruments:
       if state and instruments_from_state(state):
-        return instruments_from_state(state), msg + " (кэш)", False, comparison
-      return fallback_instruments, msg, False, comparison
-    return fallback_instruments, msg, False, comparison
+        return instruments_from_state(state), msg + " (кэш)", False, comparison, 0.0
+      return fallback_instruments, msg, False, comparison, 0.0
+    return fallback_instruments, msg, False, comparison, 0.0
 
   tickers = ", ".join(f"{i.ticker} {i.target_weight:.0%}" for i in instruments)
   msg = combined_summary or f"{advisor_source} выбрал: {tickers}"
   if advisor_source and "выбран" not in msg.lower():
     msg = f"[{advisor_source}] {msg}"
+  if expected_turnover > 0.01:
+    msg += f" (turnover ~{expected_turnover:.0%})"
 
   old_tickers = {i.ticker for i in instruments_from_state(state)} if state else set()
   new_tickers = {i.ticker for i in instruments}
+  weight_eps = float(getattr(dp, "weight_change_threshold", 0.03) or 0.03)
   changed = old_tickers != new_tickers or not state
   if not changed and state:
     old_by_ticker = {i.ticker: float(i.target_weight) for i in instruments_from_state(state)}
     for ins in instruments:
       old_w = old_by_ticker.get(ins.ticker)
-      if old_w is not None and abs(old_w - float(ins.target_weight)) > 0.005:
+      if old_w is not None and abs(old_w - float(ins.target_weight)) > weight_eps:
         changed = True
         break
 
-  save_state(state_path, instruments, summary=combined_summary, advisor_source=advisor_source)
-  return instruments, msg, changed, comparison
+  hold_since = update_ticker_hold_since(hold_since, old_tickers, new_tickers)
+  save_state(
+    state_path,
+    instruments,
+    summary=combined_summary,
+    advisor_source=advisor_source,
+    proposal_scores=proposal_scores,
+    ticker_hold_since=hold_since,
+    expected_turnover=expected_turnover,
+  )
+  return instruments, msg, changed, comparison, expected_turnover

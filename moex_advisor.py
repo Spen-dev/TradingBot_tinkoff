@@ -15,6 +15,7 @@ def select_portfolio_via_moex(
   max_instruments: int,
   max_weight: float,
   history_days: int = 90,
+  **quant_kwargs: Any,
 ) -> Tuple[List[Dict[str, Any]], str]:
   def get_bars(ticker: str):
     return client.get_daily_bars(ticker, days=history_days)
@@ -26,6 +27,7 @@ def select_portfolio_via_moex(
     max_instruments,
     max_weight,
     source_label="MOEX",
+    **quant_kwargs,
   )
 
 

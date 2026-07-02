@@ -57,7 +57,7 @@ def test_pick_best_portfolio_prefers_higher_sharpe():
   good = [{"ticker": "SBER", "target_weight": 0.6}, {"ticker": "LKOH", "target_weight": 0.4}]
   weak = [{"ticker": "GMKN", "target_weight": 1.0}]
   assert score_portfolio_proposal(market, good) > score_portfolio_proposal(market, weak)
-  name, sel, msg, score = pick_best_portfolio(
+  name, sel, msg, score, _ = pick_best_portfolio(
     [("llm", weak, "ds"), ("finam", good, "fm")],
     market,
   )

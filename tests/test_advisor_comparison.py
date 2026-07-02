@@ -21,7 +21,7 @@ def test_format_advisor_pick_comparison_marks_winner_and_scores():
     market_client=market,
     ai_priority=True,
   )
-  assert "Macro vs MOEX" in text
+  assert "Macro vs Quant" in text
   assert "✅ MOEX" in text
   assert "· Macro" in text
   assert "PLZL 60%" in text
@@ -35,7 +35,7 @@ def test_format_advisor_pick_comparison_shows_missing_advisor():
   with patch("tinkoff_bot.advisor_ensemble.score_portfolio_proposal", return_value=-0.5):
     text = format_advisor_pick_comparison(proposals, "moex", market, ai_priority=False)
   assert "нет предложения: Macro (RSS+LLM)" in text
-  assert "raw=-0.500" in text
+  assert "oos=-0.500" in text
 
 
 def test_format_advisor_pick_comparison_empty_proposals():
