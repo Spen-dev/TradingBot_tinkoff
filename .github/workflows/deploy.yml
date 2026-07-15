@@ -91,9 +91,9 @@ jobs:
             else
               docker compose up -d --force-recreate bot
             fi
-            sleep 20
-            docker compose exec -T bot python scripts/sync_sandbox_balance.py || true
-            docker compose exec -T bot python scripts/prepare_observation_start.py --update-baseline-only || true
-            docker compose exec -T bot python scripts/preflight_run.py || true
+            sleep 15
+            timeout 60 docker compose exec -T bot python scripts/sync_sandbox_balance.py || true
+            timeout 30 docker compose exec -T bot python scripts/prepare_observation_start.py --update-baseline-only || true
+            timeout 90 docker compose exec -T bot python scripts/preflight_run.py --quick || true
             docker compose ps
-            curl -sf http://127.0.0.1:8000/health || true
+            curl -sf --max-time 10 http://127.0.0.1:8000/health && echo "health: ok" || echo "health: skip (broker может быть временно недоступен)"

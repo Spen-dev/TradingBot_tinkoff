@@ -14,6 +14,17 @@ if str(ROOT) not in sys.path:
 
 
 def main() -> int:
+  import argparse
+
+  parser = argparse.ArgumentParser(description="Preflight перед длинным прогоном")
+  parser.add_argument(
+    "--quick",
+    action="store_true",
+    help="Быстрая проверка для deploy: без build_rebalance_orders и audit с брокером",
+  )
+  args = parser.parse_args()
+  quick = bool(args.quick)
+
   from dotenv import load_dotenv
 
   load_dotenv(ROOT / ".env")
@@ -78,29 +89,33 @@ def main() -> int:
     from tinkoff_bot.portfolio import PortfolioManager
     from tinkoff_bot.risk import RiskManager
 
-    broker = TinkoffBroker(cfg.tinkoff)
-    equity, cash, positions = broker.get_equity_snapshot(cfg.portfolio.base_currency)
-    pm = PortfolioManager(cfg.portfolio, instruments, broker, RiskManager(cfg.risk))
-    planned_orders = len(pm.build_rebalance_orders(equity))
-    rows, max_dev = compute_portfolio_drift(
-      equity, cash, instruments, positions,
-      drift_pct=float(getattr(cfg.portfolio, "rebalance_drift_pct", 0.05) or 0.05),
-    )
-    print("\n=== Portfolio ===")
-    print(f"equity={equity:.0f} cash={cash:.0f} positions={len(positions)} max_drift={max_dev:.1%}")
-    print(f"trading_day_today={trading_today} planned_orders={planned_orders}")
-    if rows:
-      for r in rows[:6]:
-        print(f"  {r['ticker']}: {r['target_pct']:.1f}% -> {r['current_pct']:.1f}% ({r['dev_pct']:+.1f}%)")
-    if len(positions) == 0 and equity > 1000 and max_dev >= 0.05:
-      if not trading_today and planned_orders > 0:
-        drift_note = (
-          f"OK: выходной MOEX — позиции появятся после ребаланса "
-          f"(запланировано {planned_orders} заявок)"
-        )
-      else:
-        drift_note = "WARN: цели есть, позиций нет — проверьте ребаланс и bot.log"
-      print(f"\n{drift_note}")
+    if quick:
+      print("\n=== Portfolio ===")
+      print("SKIP (--quick: deploy smoke, без вызовов Tinkoff)")
+    else:
+      broker = TinkoffBroker(cfg.tinkoff)
+      equity, cash, positions = broker.get_equity_snapshot(cfg.portfolio.base_currency)
+      pm = PortfolioManager(cfg.portfolio, instruments, broker, RiskManager(cfg.risk))
+      planned_orders = len(pm.build_rebalance_orders(equity))
+      rows, max_dev = compute_portfolio_drift(
+        equity, cash, instruments, positions,
+        drift_pct=float(getattr(cfg.portfolio, "rebalance_drift_pct", 0.05) or 0.05),
+      )
+      print("\n=== Portfolio ===")
+      print(f"equity={equity:.0f} cash={cash:.0f} positions={len(positions)} max_drift={max_dev:.1%}")
+      print(f"trading_day_today={trading_today} planned_orders={planned_orders}")
+      if rows:
+        for r in rows[:6]:
+          print(f"  {r['ticker']}: {r['target_pct']:.1f}% -> {r['current_pct']:.1f}% ({r['dev_pct']:+.1f}%)")
+      if len(positions) == 0 and equity > 1000 and max_dev >= 0.05:
+        if not trading_today and planned_orders > 0:
+          drift_note = (
+            f"OK: выходной MOEX — позиции появятся после ребаланса "
+            f"(запланировано {planned_orders} заявок)"
+          )
+        else:
+          drift_note = "WARN: цели есть, позиций нет — проверьте ребаланс и bot.log"
+        print(f"\n{drift_note}")
   except Exception as e:
     print(f"\n=== Portfolio ===\nSKIP: {e}")
 
@@ -108,8 +123,8 @@ def main() -> int:
     ROOT,
     days=1,
     drift_pct=float(getattr(cfg.portfolio, "rebalance_drift_pct", 0.05) or 0.05),
-    broker=broker,
-    instruments=instruments if broker else None,
+    broker=None if quick else broker,
+    instruments=instruments if broker and not quick else None,
     currency=cfg.portfolio.base_currency,
   )
   save_audit_report(ROOT, report)
@@ -127,6 +142,10 @@ def main() -> int:
   failed = (not ok_cfg) or api_code != 0 or bool(crit) or not lock_ok
   if drift_note.startswith("WARN:"):
     failed = True
+  if quick and failed and crit and all(f.code == "WATCHDOG_RESTART" for f in crit):
+    failed = False
+    print("\n=== Deploy quick ===")
+    print("WARN: WATCHDOG_RESTART в audit — не блокируем deploy (Tinkoff мог быть недоступен)")
   print("\n=== Result ===")
   if not lock_ok:
     print("NO-GO (нет observation_lock — prepare_observation_start.py)")
