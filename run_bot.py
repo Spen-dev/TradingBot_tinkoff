@@ -39,6 +39,48 @@ def _is_tinkoff_connect_error(exc: BaseException) -> bool:
   return False
 
 
+class _BrokerConnectivity:
+  """Один алерт при падении API Tinkoff и один при восстановлении — без спама."""
+
+  def __init__(self) -> None:
+    self._available: bool | None = None
+
+  @property
+  def available(self) -> bool | None:
+    return self._available
+
+  async def note_success(self, tg: "TelegramController | None") -> None:
+    if self._available is False:
+      self._available = True
+      await send_alert(tg, "🟢 API Tinkoff снова доступен.", "broker_recovered", force=True)
+    elif self._available is None:
+      self._available = True
+
+  async def note_failure(
+    self,
+    tg: "TelegramController | None",
+    exc: BaseException,
+    *,
+    context: str = "",
+  ) -> bool:
+    """True, если это сетевая ошибка API (обработана без повторных алертов)."""
+    if not _is_tinkoff_connect_error(exc):
+      return False
+    if self._available is not False:
+      self._available = False
+      detail = _format_error(exc)
+      title = "⚠️ API Tinkoff недоступен"
+      if context:
+        title += f" ({context})"
+      await send_alert(
+        tg,
+        f"{title}: {detail}\n\nПовторные попытки в фоне. Следующее сообщение — когда API восстановится.",
+        "broker_unavailable",
+        force=True,
+      )
+    return True
+
+
 class OnRebalanceResult(NamedTuple):
   message: str
   tick_schedule_calendar: bool = False
@@ -136,6 +178,7 @@ async def main() -> None:
     openrouter_cfg=getattr(cfg, "openrouter", None),
   )
   broker_timeout = max(5.0, float(getattr(cfg.portfolio, "request_timeout_seconds", 30) or 30))
+  broker_conn = _BrokerConnectivity()
   rebalance_lock = asyncio.Lock()
 
   fallback_alert_last_date: date | None = None
@@ -214,10 +257,16 @@ async def main() -> None:
 
   async def broker_get_cash_async():
     loop = asyncio.get_running_loop()
-    return await asyncio.wait_for(
-      loop.run_in_executor(None, lambda: broker.get_cash_balance(currency=cfg.portfolio.base_currency)),
-      timeout=broker_timeout,
-    )
+    try:
+      result = await asyncio.wait_for(
+        loop.run_in_executor(None, lambda: broker.get_cash_balance(currency=cfg.portfolio.base_currency)),
+        timeout=broker_timeout,
+      )
+      await broker_conn.note_success(tg)
+      return result
+    except Exception as e:
+      await broker_conn.note_failure(tg, e)
+      raise
 
   day_start_equity: float | None = None
   last_trade_time: datetime | None = None
@@ -275,20 +324,32 @@ async def main() -> None:
   async def compute_equity_async() -> tuple[float, float, int]:
     """Не блокировать event loop Telegram при таймаутах Tinkoff API."""
     loop = asyncio.get_running_loop()
-    return await asyncio.wait_for(
-      loop.run_in_executor(None, compute_equity),
-      timeout=broker_timeout,
-    )
+    try:
+      result = await asyncio.wait_for(
+        loop.run_in_executor(None, compute_equity),
+        timeout=broker_timeout,
+      )
+      await broker_conn.note_success(tg)
+      return result
+    except Exception as e:
+      await broker_conn.note_failure(tg, e)
+      raise
 
   async def get_equity_snapshot_async():
     loop = asyncio.get_running_loop()
-    return await asyncio.wait_for(
-      loop.run_in_executor(
-        None,
-        lambda: broker.get_equity_snapshot(currency=cfg.portfolio.base_currency),
-      ),
-      timeout=broker_timeout,
-    )
+    try:
+      result = await asyncio.wait_for(
+        loop.run_in_executor(
+          None,
+          lambda: broker.get_equity_snapshot(currency=cfg.portfolio.base_currency),
+        ),
+        timeout=broker_timeout,
+      )
+      await broker_conn.note_success(tg)
+      return result
+    except Exception as e:
+      await broker_conn.note_failure(tg, e)
+      raise
 
   def maybe_reset_equity_baseline(equity: float, cash: float, npos: int) -> None:
     """Авто-сброс baseline equity в песочнице, если счёт явно обнулился."""
@@ -606,6 +667,9 @@ async def main() -> None:
         )
       except Exception as e:
         inc_error()
+        if _is_tinkoff_connect_error(e):
+          logger.warning("on_rebalance (%s): API Tinkoff недоступен: %s", source, _format_error(e))
+          return OnRebalanceResult("", False, False)
         logger.exception("on_rebalance: %s", e)
         em = f"Ошибка ребаланса: {e}"
         return OnRebalanceResult(em, False, False)
@@ -820,13 +884,13 @@ async def main() -> None:
     if started or last_err is None:
       return
     logger.exception("auto_start_sandbox: все попытки исчерпаны")
-    if _is_tinkoff_connect_error(last_err):
-      hint = (
-        "VPS не может подключиться к API Tinkoff (sandbox-invest-public-api.tbank.ru) — сеть, не токен.\n"
-        "Проверьте маршрут/фаервол хостинга или нажмите /start позже, когда API снова доступен."
-      )
-    else:
-      hint = "Нажмите /start в Telegram или проверьте TINKOFF_TOKEN / account_id в .env."
+    if await broker_conn.note_failure(
+      tg,
+      last_err,
+      context=f"автостарт sandbox ({len(delays_sec)} попыток)",
+    ):
+      return
+    hint = "Нажмите /start в Telegram или проверьте TINKOFF_TOKEN / account_id в .env."
     await send_alert(
       tg,
       f"❌ Автостарт sandbox не удался ({len(delays_sec)} попыток): {_format_error(last_err)}\n\n{hint}",
@@ -887,13 +951,6 @@ async def main() -> None:
           equity, cash, npos = await compute_equity_async()
         except Exception as eq_e:
           logger.warning("Дневной дайджест: compute_equity: %s", eq_e)
-          await send_alert(
-            tg,
-            f"📊 Дневной дайджест: не удалось снять портфель ({eq_e}). Повтор в следующие минуты.",
-            "daily_digest",
-            force=True,
-            require_telegram=False,
-          )
           continue
         st = risk.update_equity(equity, day_start_for_digest)
         dd = (st.max_equity_seen - st.equity) / max(st.max_equity_seen, 1e-9)
@@ -1382,7 +1439,6 @@ async def main() -> None:
             except Exception as e:
               inc_error()
               logger.warning("Авторебаланс по расписанию: брокер не отвечает, повторим на следующем тике: %s", e)
-              await send_alert(tg, f"⚠️ Ребаланс отложен: брокер не отвечает ({e})", "rebalance_skip", force=True)
             else:
               try:
                 outcome = await on_rebalance("schedule")
@@ -1392,22 +1448,24 @@ async def main() -> None:
                     last_interval_rebalance_at = now
                   else:
                     last_rebalance_date = today
-                try:
-                  await send_alert(
-                    tg,
-                    f"🤖 Авторебаланс (по расписанию): {outcome.message}",
-                    "rebalance_schedule",
-                    force=True,
-                  )
-                except Exception as send_e:
-                  logger.warning("Авторебаланс (по расписанию): Telegram: %s — результат уже учтён в планировщике", send_e)
+                if outcome.message.strip():
+                  try:
+                    await send_alert(
+                      tg,
+                      f"🤖 Авторебаланс (по расписанию): {outcome.message}",
+                      "rebalance_schedule",
+                      force=True,
+                    )
+                  except Exception as send_e:
+                    logger.warning("Авторебаланс (по расписанию): Telegram: %s — результат уже учтён в планировщике", send_e)
               except Exception as e:
                 inc_error()
                 logger.exception("Авторебаланс по расписанию: ошибка: %s", e)
-                try:
-                  await send_alert(tg, f"❌ Ошибка авторебаланса: {e}", "rebalance_schedule_error", force=True)
-                except Exception as send_e2:
-                  logger.warning("Авторебаланс: не удалось отправить алерт об ошибке: %s", send_e2)
+                if not _is_tinkoff_connect_error(e):
+                  try:
+                    await send_alert(tg, f"❌ Ошибка авторебаланса: {e}", "rebalance_schedule_error", force=True)
+                  except Exception as send_e2:
+                    logger.warning("Авторебаланс: не удалось отправить алерт об ошибке: %s", send_e2)
 
           # Дрейф — сразу после расписания (не после тяжёлого выбора стратегий / снимка)
           effective_check_interval = check_interval
@@ -1430,7 +1488,7 @@ async def main() -> None:
                     await broker_get_cash_async()
                   except Exception as e:
                     inc_error()
-                    await send_alert(tg, f"⚠️ Ребаланс пропущен: брокер не отвечает ({e})", "rebalance_skip", force=True)
+                    logger.warning("Ребаланс по дрейфу: брокер не отвечает: %s", e)
                   else:
                     logger.info(
                       "Ребаланс по дрейфу: запуск (дата %s, window_now=%s, drift_pct=%.2f)",
@@ -1441,19 +1499,21 @@ async def main() -> None:
                     outcome = await on_rebalance("drift")
                     if outcome.tick_drift_cooldown:
                       last_drift_rebalance = now
-                    try:
-                      await send_alert(
-                        tg,
-                        f"📈 Ребаланс по дрейфу (дрейф >{drift_pct:.0%}): {outcome.message}",
-                        "rebalance_drift",
-                        force=True,
-                      )
-                    except Exception as send_e:
-                      logger.warning("Ребаланс по дрейфу: Telegram: %s — cooldown уже учтён", send_e)
+                    if outcome.message.strip():
+                      try:
+                        await send_alert(
+                          tg,
+                          f"📈 Ребаланс по дрейфу (дрейф >{drift_pct:.0%}): {outcome.message}",
+                          "rebalance_drift",
+                          force=True,
+                        )
+                      except Exception as send_e:
+                        logger.warning("Ребаланс по дрейфу: Telegram: %s — cooldown уже учтён", send_e)
               except Exception as e:
                 inc_error()
                 logger.exception("Ребаланс по дрейфу: ошибка: %s", e)
-                await send_alert(tg, f"❌ Ошибка ребаланса по дрейфу: {e}", "rebalance_drift_error", force=True)
+                if not _is_tinkoff_connect_error(e):
+                  await send_alert(tg, f"❌ Ошибка ребаланса по дрейфу: {e}", "rebalance_drift_error", force=True)
 
         # Недельный отчёт и ниже — независимо от started.
         weekly_slot = wh * 60 + wm
@@ -1747,10 +1807,14 @@ async def main() -> None:
         failures = 0
       except Exception as e:
         logger.warning("watchdog get_cash_balance: %s", e)
+        if _is_tinkoff_connect_error(e):
+          await broker_conn.note_failure(tg, e, context="watchdog")
+          failures = 0
+          continue
         failures += 1
         if failures >= max(1, exit_after):
           try:
-            await send_alert(tg, "⚠️ Робот: брокер не отвечает после нескольких попыток.", "watchdog", force=True)
+            await send_alert(tg, f"⚠️ Робот: брокер не отвечает ({_format_error(e)}).", "watchdog", force=True)
           except Exception as alert_err:
             logger.warning("watchdog send_alert: %s", alert_err)
           if exit_after > 0:
