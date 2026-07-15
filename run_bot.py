@@ -425,6 +425,26 @@ async def main() -> None:
       logger.exception("on_start: %s", e)
       raise
 
+  async def on_start_for_tg() -> str:
+    """Ответ в Telegram на /start и кнопку «Старт» (без зависания без ответа при сбое API)."""
+    if broker_conn.available is False:
+      return (
+        "❌ API Tinkoff недоступен с этого VPS.\n\n"
+        "Invest API не отвечает (сеть). Нужен сервер с российским IP или whitelist у T-Bank.\n"
+        "Telegram и токен здесь ни при чём."
+      )
+    try:
+      await on_start()
+      return "🟢 Робот запущен. Используйте кнопки ниже."
+    except Exception as e:
+      if _is_tinkoff_connect_error(e):
+        return (
+          "❌ Не удалось подключиться к API Tinkoff.\n\n"
+          f"{_format_error(e)}\n\n"
+          "VPS не достучался до sandbox-invest-public-api.tbank.ru — перенесите бота на RU VPS."
+        )
+      return f"❌ Ошибка запуска: {_format_error(e)}"
+
   async def on_stop():
     nonlocal started
     started = False
@@ -817,7 +837,7 @@ async def main() -> None:
     return (await on_rebalance("manual")).message
 
   tg.set_callbacks(
-    on_start=on_start,
+    on_start=on_start_for_tg,
     on_stop=on_stop,
     on_stop_request=on_stop_request,
     on_status=on_status,

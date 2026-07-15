@@ -43,7 +43,7 @@ class TelegramController:
     self._display_timezone = (display_timezone or "").strip()
     self._stop_event = asyncio.Event()
 
-    self._on_start: Callable[[], Awaitable[None]] | None = None
+    self._on_start: Callable[[], Awaitable[str]] | None = None
     self._on_stop: Callable[[], Awaitable[None]] | None = None
     self._on_status: Callable[[], Awaitable[str]] | None = None
     self._on_rebalance: Callable[[], Awaitable[str]] | None = None
@@ -67,7 +67,7 @@ class TelegramController:
 
   def set_callbacks(
     self,
-    on_start: Callable[[], Awaitable[None]],
+    on_start: Callable[[], Awaitable[str]],
     on_stop: Callable[[], Awaitable[None]],
     on_status: Callable[[], Awaitable[str]],
     on_rebalance: Callable[[], Awaitable[str]],
@@ -177,9 +177,10 @@ class TelegramController:
       if self._is_started and self._is_started():
         await msg.answer("Робот уже запущен.", reply_markup=get_main_keyboard())
         return
+      text = "Готово. Используйте кнопки ниже."
       if self._on_start:
-        await self._on_start()
-      await msg.answer("Готово. Используйте кнопки ниже.", reply_markup=get_main_keyboard())
+        text = await self._on_start()
+      await msg.answer(text, reply_markup=get_main_keyboard())
 
     @self.dp.message(lambda m: m.text and m.text.strip() == START_BUTTON_TEXT)
     async def btn_start(msg: types.Message):
@@ -188,9 +189,10 @@ class TelegramController:
       if self._is_started and self._is_started():
         await msg.answer("Робот уже запущен.", reply_markup=get_main_keyboard())
         return
+      text = "Готово. Используйте кнопки ниже."
       if self._on_start:
-        await self._on_start()
-      await msg.answer("Готово. Используйте кнопки ниже.", reply_markup=get_main_keyboard())
+        text = await self._on_start()
+      await msg.answer(text, reply_markup=get_main_keyboard())
 
     @self.dp.message(Command("help"))
     async def cmd_help(msg: types.Message):
