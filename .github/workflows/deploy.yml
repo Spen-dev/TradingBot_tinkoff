@@ -48,6 +48,11 @@ jobs:
             else
               echo 'SANDBOX_TARGET_CASH=200000' > .env
             fi
+            VPS_HOST="${{ secrets.VPS_HOST }}"
+            if [ -n "$VPS_HOST" ] && [ -f .env ] && ! grep -q '^DASHBOARD_URL=' .env; then
+              echo "DASHBOARD_URL=http://${VPS_HOST}:8000/dashboard" >> .env
+              echo "Added DASHBOARD_URL for Telegram dashboard button"
+            fi
 
             changed_files=""
             if [ "$PRE" != "$POST" ]; then

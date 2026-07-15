@@ -141,8 +141,8 @@ DASHBOARD_HTML = """
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
   <script>
     const dashboardToken = new URLSearchParams(window.location.search).get('token') || '';
     async function fetchJson(url) {
@@ -151,6 +151,9 @@ DASHBOARD_HTML = """
         u += (u.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(dashboardToken);
       }
       const r = await fetch(u, { cache: 'no-store' });
+      if (r.status === 401) {
+        throw new Error('HTTP 401 — добавьте ?token=... к URL (DASHBOARD_TOKEN в .env на сервере)');
+      }
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return await r.json();
     }
@@ -235,102 +238,112 @@ DASHBOARD_HTML = """
           tbody.appendChild(tr);
         });
 
-        // Эволюция стоимости портфеля: две точки в день — при ребалансе и последнее значение за день
-        let pts = equityHist.points || [];
-        let usedSynthetic = false;
-        if (pts.length === 0 && status.equity != null && status.equity !== undefined) {
+        try {
+          if (typeof Chart === 'undefined') {
+            throw new Error('Chart.js не загрузился (проверьте доступ к cdn.jsdelivr.net)');
+          }
+          // Эволюция стоимости портфеля: две точки в день — при ребалансе и последнее значение за день
+          let pts = equityHist.points || [];
+          let usedSynthetic = false;
+          if (pts.length === 0 && status.equity != null && status.equity !== undefined) {
+            const now = new Date();
+            const yesterday = new Date(now);
+            yesterday.setDate(yesterday.getDate() - 1);
+            pts = [
+              { ts: yesterday.toISOString(), equity: status.equity },
+              { ts: now.toISOString(), equity: status.equity },
+            ];
+            usedSynthetic = true;
+          }
+          const rebalanceTimeStr = (status.rebalance_time || '10:00').trim();
+          const [rbH, rbM] = rebalanceTimeStr.split(':').map(s => parseInt(s, 10) || 0);
+          function dayKey(d) {
+            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+          }
+          const byDay = new Map();
+          pts.forEach(p => {
+            const d = new Date(p.ts);
+            const key = dayKey(d);
+            if (!byDay.has(key)) byDay.set(key, []);
+            byDay.get(key).push({ ts: p.ts, equity: p.equity, date: d });
+          });
+          const sortedDays = Array.from(byDay.keys()).sort();
+          const dayPoints = [];
+          sortedDays.forEach(k => {
+            const list = byDay.get(k).sort((a, b) => new Date(a.ts) - new Date(b.ts));
+            const firstDate = list[0].date;
+            const rebalanceTs = new Date(firstDate.getFullYear(), firstDate.getMonth(), firstDate.getDate(), rbH, rbM, 0);
+            let rebalPoint = list.reduce((best, p) => {
+              const dist = Math.abs(new Date(p.ts) - rebalanceTs);
+              return (!best || dist < best.dist) ? { point: p, dist } : best;
+            }, null);
+            if (!rebalPoint) rebalPoint = { point: list[0] };
+            const lastPoint = list[list.length - 1];
+            dayPoints.push(rebalPoint.point);
+            if (rebalPoint.point !== lastPoint) dayPoints.push(lastPoint);
+            else dayPoints.push({ ts: lastPoint.ts, equity: lastPoint.equity });
+          });
           const now = new Date();
+          const todayKey = dayKey(now);
           const yesterday = new Date(now);
           yesterday.setDate(yesterday.getDate() - 1);
-          pts = [
-            { ts: yesterday.toISOString(), equity: status.equity },
-            { ts: now.toISOString(), equity: status.equity },
-          ];
-          usedSynthetic = true;
-        }
-        const rebalanceTimeStr = (status.rebalance_time || '10:00').trim();
-        const [rbH, rbM] = rebalanceTimeStr.split(':').map(s => parseInt(s, 10) || 0);
-        function dayKey(d) {
-          return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-        }
-        const byDay = new Map();
-        pts.forEach(p => {
-          const d = new Date(p.ts);
-          const key = dayKey(d);
-          if (!byDay.has(key)) byDay.set(key, []);
-          byDay.get(key).push({ ts: p.ts, equity: p.equity, date: d });
-        });
-        const sortedDays = Array.from(byDay.keys()).sort();
-        const dayPoints = [];
-        sortedDays.forEach(k => {
-          const list = byDay.get(k).sort((a, b) => new Date(a.ts) - new Date(b.ts));
-          const firstDate = list[0].date;
-          const rebalanceTs = new Date(firstDate.getFullYear(), firstDate.getMonth(), firstDate.getDate(), rbH, rbM, 0);
-          let rebalPoint = list.reduce((best, p) => {
-            const dist = Math.abs(new Date(p.ts) - rebalanceTs);
-            return (!best || dist < best.dist) ? { point: p, dist } : best;
-          }, null);
-          if (!rebalPoint) rebalPoint = { point: list[0] };
-          const lastPoint = list[list.length - 1];
-          dayPoints.push(rebalPoint.point);
-          if (rebalPoint.point !== lastPoint) dayPoints.push(lastPoint);
-          else dayPoints.push({ ts: lastPoint.ts, equity: lastPoint.equity });
-        });
-        const now = new Date();
-        const todayKey = dayKey(now);
-        const yesterday = new Date(now);
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayKey = dayKey(yesterday);
-        if (dayPoints.length > 0 && sortedDays[0] === todayKey && !byDay.has(yesterdayKey)) {
-          const firstEquity = dayPoints[0].equity;
-          dayPoints.unshift(
-            { ts: yesterday.toISOString().slice(0,10) + 'T' + String(rbH).padStart(2,'0') + ':' + String(rbM).padStart(2,'0') + ':00.000Z', equity: firstEquity },
-            { ts: yesterday.toISOString(), equity: firstEquity }
-          );
-        }
-        const labels = dayPoints.map(p => new Date(p.ts));
-        const data = dayPoints.map(p => p.equity);
-        const subEl = document.getElementById('equity-subtitle');
-        if (subEl) subEl.textContent = usedSynthetic
-          ? 'Показано текущее значение (история накапливается каждую минуту)'
-          : 'Equity по дням';
-        if (!window.equityChart) {
-          const ctx = document.getElementById('equity-chart').getContext('2d');
-          window.equityChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-              labels,
-              datasets: [{
-                label: 'Equity, RUB',
-                data,
-                borderColor: '#38bdf8',
-                backgroundColor: 'rgba(56,189,248,0.12)',
-                tension: 0.3,
-                pointRadius: 0,
-              }],
-            },
-            options: {
-              responsive: true,
-              maintainAspectRatio: false,
-              plugins: { legend: { display: false } },
-              scales: {
-                x: {
-                  type: 'time',
-                  time: { unit: 'day', displayFormats: { day: 'dd.MM', week: 'dd.MM', month: 'MM.yy' } },
-                  ticks: { color: '#9ca3af', maxTicksLimit: 31 },
-                  grid: { color: 'rgba(15,23,42,0.7)' },
-                },
-                y: {
-                  ticks: { color: '#9ca3af' },
-                  grid: { color: 'rgba(15,23,42,0.7)' },
+          const yesterdayKey = dayKey(yesterday);
+          if (dayPoints.length > 0 && sortedDays[0] === todayKey && !byDay.has(yesterdayKey)) {
+            const firstEquity = dayPoints[0].equity;
+            dayPoints.unshift(
+              { ts: yesterday.toISOString().slice(0,10) + 'T' + String(rbH).padStart(2,'0') + ':' + String(rbM).padStart(2,'0') + ':00.000Z', equity: firstEquity },
+              { ts: yesterday.toISOString(), equity: firstEquity }
+            );
+          }
+          const labels = dayPoints.map(p => new Date(p.ts));
+          const data = dayPoints.map(p => p.equity);
+          const subEl = document.getElementById('equity-subtitle');
+          if (subEl) subEl.textContent = usedSynthetic
+            ? 'Показано текущее значение (история накапливается каждую минуту)'
+            : 'Equity по дням';
+          if (!window.equityChart) {
+            const ctx = document.getElementById('equity-chart').getContext('2d');
+            window.equityChart = new Chart(ctx, {
+              type: 'line',
+              data: {
+                labels,
+                datasets: [{
+                  label: 'Equity, RUB',
+                  data,
+                  borderColor: '#38bdf8',
+                  backgroundColor: 'rgba(56,189,248,0.12)',
+                  tension: 0.3,
+                  pointRadius: 0,
+                }],
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                  x: {
+                    type: 'time',
+                    time: { unit: 'day', displayFormats: { day: 'dd.MM', week: 'dd.MM', month: 'MM.yy' } },
+                    ticks: { color: '#9ca3af', maxTicksLimit: 31 },
+                    grid: { color: 'rgba(15,23,42,0.7)' },
+                  },
+                  y: {
+                    ticks: { color: '#9ca3af' },
+                    grid: { color: 'rgba(15,23,42,0.7)' },
+                  },
                 },
               },
-            },
-          });
-        } else {
-          window.equityChart.data.labels = labels;
-          window.equityChart.data.datasets[0].data = data;
-          window.equityChart.update('none');
+            });
+          } else {
+            window.equityChart.data.labels = labels;
+            window.equityChart.data.datasets[0].data = data;
+            window.equityChart.update('none');
+          }
+        } catch (chartErr) {
+          const subEl = document.getElementById('equity-subtitle');
+          if (subEl) {
+            subEl.innerHTML = '<span class="status-warn">График недоступен: ' + chartErr.message + '</span>';
+          }
         }
       } catch (e) {
         document.getElementById('status-body').innerHTML = '<span class="status-bad">Ошибка загрузки: ' + e.message + '</span>';
@@ -641,7 +654,13 @@ async def handle_health(
     data = await asyncio.wait_for(reader.read(1024), timeout=2.0)
     line = data.decode("utf-8", errors="ignore").split("\r\n")[0]
     if _needs_dashboard_auth(line) and not _dashboard_auth_ok(line):
-      await _write_response(writer, 401, b"Unauthorized", "text/plain; charset=utf-8")
+      body = (
+        "401 Unauthorized\n\n"
+        "Дашборд защищён DASHBOARD_TOKEN.\n"
+        "Откройте: /dashboard?token=ВАШ_ТОКЕН\n"
+        "Или уберите DASHBOARD_TOKEN из .env на сервере."
+      ).encode("utf-8")
+      await _write_response(writer, 401, body, "text/plain; charset=utf-8")
       return
     # Маршрутизация по простому HTTP-line
     if "GET /metrics" in line:

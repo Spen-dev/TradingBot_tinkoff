@@ -246,6 +246,24 @@ async def main() -> None:
     equity, cash, positions = broker.get_equity_snapshot(currency=cfg.portfolio.base_currency)
     return equity, cash, len(positions)
 
+  async def compute_equity_async() -> tuple[float, float, int]:
+    """Не блокировать event loop Telegram при таймаутах Tinkoff API."""
+    loop = asyncio.get_running_loop()
+    return await asyncio.wait_for(
+      loop.run_in_executor(None, compute_equity),
+      timeout=broker_timeout,
+    )
+
+  async def get_equity_snapshot_async():
+    loop = asyncio.get_running_loop()
+    return await asyncio.wait_for(
+      loop.run_in_executor(
+        None,
+        lambda: broker.get_equity_snapshot(currency=cfg.portfolio.base_currency),
+      ),
+      timeout=broker_timeout,
+    )
+
   def maybe_reset_equity_baseline(equity: float, cash: float, npos: int) -> None:
     """Авто-сброс baseline equity в песочнице, если счёт явно обнулился."""
     nonlocal day_start_equity
@@ -271,7 +289,7 @@ async def main() -> None:
         # В песочнице нужен отдельный sandbox account_id.
         # Если в .env подставили обычный брокерский account_id, создаём sandbox-аккаунт и продолжаем.
         try:
-          _ = broker.get_cash_balance(currency=cfg.portfolio.base_currency)
+          _ = await broker_get_cash_async()
         except RequestError as e:
           if str(e).find("50004") != -1:
             from t_tech.invest.sandbox.client import SandboxClient
@@ -287,12 +305,16 @@ async def main() -> None:
             raise
 
         target_cash = float(os.getenv("SANDBOX_TARGET_CASH", "200000"))
-        _, cash, positions = broker.get_equity_snapshot(currency=cfg.portfolio.base_currency)
+        _, cash, positions = await get_equity_snapshot_async()
         # Пополнение только пустого счёта (без позиций), не доливаем кэш при уже купленных бумагах.
         if target_cash > 0 and len(positions) == 0 and cash < target_cash:
-          broker.set_sandbox_balance(target_cash - cash, currency=cfg.portfolio.base_currency)
+          loop = asyncio.get_running_loop()
+          await loop.run_in_executor(
+            None,
+            lambda: broker.set_sandbox_balance(target_cash - cash, currency=cfg.portfolio.base_currency),
+          )
 
-      equity, cash, npos = compute_equity()
+      equity, cash, npos = await compute_equity_async()
       if day_start_equity is None:
         day_start_equity = equity
       print(f"Робот запущен. Cash={cash:.2f} Equity={equity:.2f} Positions={npos}")
@@ -350,7 +372,7 @@ async def main() -> None:
     nonlocal day_start_equity
     try:
       from tinkoff_bot.telegram_utils import format_money, format_pct
-      equity, cash, npos = compute_equity()
+      equity, cash, npos = await compute_equity_async()
       maybe_reset_equity_baseline(equity, cash, npos)
       if day_start_equity is None:
         day_start_equity = equity
@@ -397,7 +419,7 @@ async def main() -> None:
   async def on_positions() -> str:
     try:
       from tinkoff_bot.telegram_utils import format_money
-      _, _, positions = broker.get_equity_snapshot(currency=cfg.portfolio.base_currency)
+      _, _, positions = await get_equity_snapshot_async()
       if not positions:
         return "Нет открытых позиций."
       figi_to_ticker = {i.figi: i.ticker for i in cfg.instruments}
@@ -413,7 +435,7 @@ async def main() -> None:
   async def on_portfolio() -> str:
     try:
       from tinkoff_bot.telegram_utils import format_money, format_pct
-      equity, _, positions = broker.get_equity_snapshot(currency=cfg.portfolio.base_currency)
+      equity, _, positions = await get_equity_snapshot_async()
       figi_to_ticker = {i.figi: i.ticker for i in cfg.instruments}
       current_by_figi = {figi: pos.value for figi, pos in positions.items()}
       total_w = sum(getattr(i, "target_weight", 0.0) for i in cfg.instruments)
@@ -461,7 +483,7 @@ async def main() -> None:
             False,
             False,
           )
-        equity, cash, npos = compute_equity()
+        equity, cash, npos = await compute_equity_async()
         maybe_reset_equity_baseline(equity, cash, npos)
         if day_start_equity is None:
           day_start_equity = equity
@@ -665,7 +687,7 @@ async def main() -> None:
   async def on_daily_digest_manual() -> str:
     """Принудительная отправка дневного дайджеста по команде из Telegram."""
     try:
-      equity, cash, npos = compute_equity()
+      equity, cash, npos = await compute_equity_async()
       day_start_val = day_start_equity or equity or 1e-9
       st = risk.update_equity(equity, day_start_val)
       dd = (st.max_equity_seen - st.equity) / max(st.max_equity_seen, 1e-9)
@@ -748,13 +770,44 @@ async def main() -> None:
   except Exception:
     health_server = None
 
+  async def auto_start_sandbox_with_retry() -> None:
+    """Автостарт после перезапуска: несколько попыток при временной недоступности API Tinkoff."""
+    if not (ops_cfg and ops_cfg.auto_start_sandbox and cfg.tinkoff.use_sandbox):
+      return
+    delays_sec = [3, 5, 10, 15, 30]
+    last_err: Exception | None = None
+    for attempt, delay in enumerate(delays_sec, start=1):
+      if started:
+        return
+      try:
+        logger.info("Автостарт sandbox: попытка %d/%d", attempt, len(delays_sec))
+        await on_start()
+        return
+      except Exception as e:
+        last_err = e
+        logger.warning("auto_start_sandbox: попытка %d/%d не удалась: %s", attempt, len(delays_sec), e)
+        if attempt < len(delays_sec):
+          await asyncio.sleep(delay)
+    if started or last_err is None:
+      return
+    logger.exception("auto_start_sandbox: все попытки исчерпаны")
+    err_text = str(last_err)
+    if "unavailable" in err_text.lower() or "handshaker" in err_text.lower():
+      hint = (
+        "API Tinkoff (sandbox) временно недоступен с VPS — сетевая ошибка, не токен.\n"
+        "Нажмите /start в Telegram позже или дождитесь следующего перезапуска Docker."
+      )
+    else:
+      hint = "Нажмите /start в Telegram или проверьте TINKOFF_TOKEN / account_id в .env."
+    await send_alert(
+      tg,
+      f"❌ Автостарт sandbox не удался ({len(delays_sec)} попыток): {last_err}\n\n{hint}",
+      "auto_start_error",
+      force=True,
+    )
+
   if ops_cfg and ops_cfg.auto_start_sandbox and cfg.tinkoff.use_sandbox and not started:
-    try:
-      logger.info("Автостарт sandbox (ops.auto_start_sandbox)")
-      await on_start()
-    except Exception as e:
-      logger.exception("auto_start_sandbox: %s", e)
-      await send_alert(tg, f"❌ Автостарт sandbox не удался: {e}", "auto_start_error", force=True)
+    asyncio.create_task(auto_start_sandbox_with_retry())
 
   async def daily_digest_scheduler():
     """Отдельный цикл: дайджест не зависит от длины тика планировщика (недельный отчёт и т.д.)."""
@@ -787,7 +840,7 @@ async def main() -> None:
           continue
         day_start_for_digest = day_start_equity or 0.0
         try:
-          equity, cash, npos = compute_equity()
+          equity, cash, npos = await compute_equity_async()
         except Exception as eq_e:
           logger.warning("Дневной дайджест: compute_equity: %s", eq_e)
           await send_alert(
@@ -1177,7 +1230,7 @@ async def main() -> None:
               market_vol_level = "normal"
           if scheduler_ok and day_start_equity is None:
             try:
-              eq_init, _, _ = compute_equity()
+              eq_init, _, _ = await compute_equity_async()
               day_start_equity = eq_init
               risk.reset_daily(eq_init)
               if last_day_reset_date is None:
@@ -1186,7 +1239,7 @@ async def main() -> None:
               pass
           if day_start_equity is not None and last_day_reset_date is not None and today != last_day_reset_date:
             try:
-              equity, _, _ = compute_equity()
+              equity, _, _ = await compute_equity_async()
               day_start_equity = equity
               risk.reset_daily(equity)
               last_day_reset_date = today
@@ -1371,7 +1424,7 @@ async def main() -> None:
               instrument_config_for_historical_signals,
             )
             from tinkoff_bot.instrument_pause import is_paused as instrument_is_paused, set_pause_hours
-            equity, cash, npos = compute_equity()
+            equity, cash, npos = await compute_equity_async()
             week_ago_dt = now - timedelta(days=7)
             week_ago = week_ago_dt.isoformat()
             trades_week = [t for t in get_trades(limit=100) if t.ts >= week_ago]
@@ -1472,7 +1525,7 @@ async def main() -> None:
           continue
         # Логирование equity и снимок статуса для дашборда (актуальные PnL и просадка)
         from tinkoff_bot.equity_history import append_equity_point
-        eq, cs, npos = compute_equity()
+        eq, cs, npos = await compute_equity_async()
         append_equity_point(now, eq, cs, npos)
         st = risk.update_equity(eq, day_start_equity or eq)
         dd = (st.max_equity_seen - st.equity) / max(st.max_equity_seen, 1e-9) if st.max_equity_seen else 0.0
