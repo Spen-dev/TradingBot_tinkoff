@@ -13,6 +13,32 @@ from t_tech.invest.exceptions import RequestError
 logger = logging.getLogger(__name__)
 
 
+def _format_error(exc: BaseException) -> str:
+  """Читаемый текст ошибки (TimeoutError часто даёт пустой str())."""
+  msg = str(exc).strip()
+  if msg:
+    return msg
+  name = type(exc).__name__
+  cause = getattr(exc, "__cause__", None)
+  if cause is not None:
+    cause_msg = str(cause).strip()
+    if cause_msg:
+      return f"{name}: {cause_msg}"
+  return name
+
+
+def _is_tinkoff_connect_error(exc: BaseException) -> bool:
+  text = _format_error(exc).lower()
+  if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+    return True
+  if any(x in text for x in ("unavailable", "handshaker", "timed out", "timeout", "connect")):
+    return True
+  cause = getattr(exc, "__cause__", None)
+  if cause is not None and cause is not exc:
+    return _is_tinkoff_connect_error(cause)
+  return False
+
+
 class OnRebalanceResult(NamedTuple):
   message: str
   tick_schedule_calendar: bool = False
@@ -785,29 +811,47 @@ async def main() -> None:
         return
       except Exception as e:
         last_err = e
-        logger.warning("auto_start_sandbox: попытка %d/%d не удалась: %s", attempt, len(delays_sec), e)
+        logger.warning(
+          "auto_start_sandbox: попытка %d/%d не удалась: %s",
+          attempt, len(delays_sec), _format_error(e),
+        )
         if attempt < len(delays_sec):
           await asyncio.sleep(delay)
     if started or last_err is None:
       return
     logger.exception("auto_start_sandbox: все попытки исчерпаны")
-    err_text = str(last_err)
-    if "unavailable" in err_text.lower() or "handshaker" in err_text.lower():
+    if _is_tinkoff_connect_error(last_err):
       hint = (
-        "API Tinkoff (sandbox) временно недоступен с VPS — сетевая ошибка, не токен.\n"
-        "Нажмите /start в Telegram позже или дождитесь следующего перезапуска Docker."
+        "VPS не может подключиться к API Tinkoff (sandbox-invest-public-api.tbank.ru) — сеть, не токен.\n"
+        "Проверьте маршрут/фаервол хостинга или нажмите /start позже, когда API снова доступен."
       )
     else:
       hint = "Нажмите /start в Telegram или проверьте TINKOFF_TOKEN / account_id в .env."
     await send_alert(
       tg,
-      f"❌ Автостарт sandbox не удался ({len(delays_sec)} попыток): {last_err}\n\n{hint}",
+      f"❌ Автостарт sandbox не удался ({len(delays_sec)} попыток): {_format_error(last_err)}\n\n{hint}",
       "auto_start_error",
       force=True,
     )
 
+  async def auto_start_sandbox_background_retry() -> None:
+    """Повторный автостарт каждые 5 мин, пока API Tinkoff недоступен при boot."""
+    if not (ops_cfg and ops_cfg.auto_start_sandbox and cfg.tinkoff.use_sandbox):
+      return
+    await asyncio.sleep(300)
+    while not started:
+      try:
+        logger.info("Автостарт sandbox: фоновая повторная попытка")
+        await on_start()
+        await send_alert(tg, "🟢 Робот запущен (автостарт после восстановления API Tinkoff).", "start", force=True)
+        return
+      except Exception as e:
+        logger.warning("auto_start background: %s", _format_error(e))
+        await asyncio.sleep(300)
+
   if ops_cfg and ops_cfg.auto_start_sandbox and cfg.tinkoff.use_sandbox and not started:
     asyncio.create_task(auto_start_sandbox_with_retry())
+    asyncio.create_task(auto_start_sandbox_background_retry())
 
   async def daily_digest_scheduler():
     """Отдельный цикл: дайджест не зависит от длины тика планировщика (недельный отчёт и т.д.)."""
